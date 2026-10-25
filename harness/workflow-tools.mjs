@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { evidence, projectPath, readJson, runPython, simpleName, successfulRun,
-  skillBodyHash, waitForSkillBody } from './tool-common.mjs';
+  skillBodyHash, waitForSkillBody, currentDataOperation, withDataOperation } from './tool-common.mjs';
 import { figureLinks } from './gallery.mjs';
 
 const { defineTool } = await import(process.env.SCI_DSH_TOOLS_MODULE
@@ -31,33 +31,55 @@ export function makeWorkflowTools(ctx, config) {
         if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
         try { const { report } = successfulRun(root, entry.name); runs.push({ run: entry.name, baseline: report.baseline, point: report.point, style: report.style }); } catch {}
       }
-      return { ok: true, data, skillInstalled: fs.existsSync(skill),
+      const dataReady = Object.values(data).every(item => item.csvExists && item.metadataExists);
+      return { ok: true, data, dataOperation: currentDataOperation(root), skillInstalled: fs.existsSync(skill),
         skillName: NAME, draftExists: fs.existsSync(projectPath(root, 'drafts', NAME, 'SKILL.md')),
         archiveExists: fs.existsSync(projectPath(root, 'dist', `${NAME}.zip`)), runs,
-        next: fs.existsSync(skill) ? '先加载专用 Skill，再执行分析。' : '可先直接分析 A；成功后创建、导出和安装 Skill。' };
+        next: !dataReady ? '数据尚未准备齐全。用户要求准备数据时调用sst_prepare_data；不要用sst_analyze代替下载。'
+          : fs.existsSync(skill) ? '先加载专用 Skill，再执行分析。' : '可先直接分析 A；成功后创建、导出和安装 Skill。' };
     }),
     tool('sst_prepare_data', '下载并准备两份真实 NOAA 海温数据和缺月教学副本。只有用户要求准备数据时调用；首次可能耗时数分钟，成功缓存可复用。', {
-      workers: { type: 'integer', description: '并发数1–4，默认2。' },
+      workers: { type: 'integer', description: '并发数1–4，默认1；不因网络故障自动提高并发。' },
       timeout_seconds: { type: 'integer', description: '单次请求超时30–120秒，默认60。' },
+      attempts: { type: 'integer', description: '每次请求最多尝试1–4次，默认3；本工具总下载预算固定1200秒。' },
+      offline: { type: 'boolean', description: '只检查并复用本地完整数据或缓存，不发出网络请求；默认false。' },
       refresh: { type: 'boolean', description: '明确要求重新下载时才设true；默认续用缓存。' },
     }, async (args, exec) => {
-      const workers = args.workers ?? 2, timeout = args.timeout_seconds ?? 60;
+      const workers = args.workers ?? 1, timeout = args.timeout_seconds ?? 60, attempts = args.attempts ?? 3;
       if (!Number.isInteger(workers) || workers < 1 || workers > 4) throw new Error('workers 必须为1–4。');
       if (!Number.isInteger(timeout) || timeout < 30 || timeout > 120) throw new Error('timeout_seconds 必须为30–120。');
-      projectPath(root, 'data', 'raw');
-      const params = ['--workers', String(workers), '--timeout', String(timeout), '--data-dir', projectPath(root, 'data')];
-      if (args.refresh === true) params.push('--refresh');
-      const result = await runPython(ctx, config, exec, 'fetch_noaa_oisst.py', params, 'sst_prepare_data');
-      if (result.ok) {
-        const checks = readJson(projectPath(root, 'data', 'data_validation.json'));
-        if (!Array.isArray(checks) || checks.length !== 2 || !checks.every(row => row.complete && row.monthly_rows === 528)) {
-          return { ...result, ok: false, issues: ['完整性报告没有证明两个格点均有528个完整月均值。'] };
+      if (!Number.isInteger(attempts) || attempts < 1 || attempts > 4) throw new Error('attempts 必须为1–4。');
+      if (args.offline === true && args.refresh === true) throw new Error('offline 与 refresh 不能同时为true。');
+      return withDataOperation(root, 'prepare', async () => {
+        projectPath(root, 'data', 'raw');
+        const params = ['--workers', String(workers), '--timeout', String(timeout), '--attempts', String(attempts),
+          '--budget-seconds', '1200', '--data-dir', projectPath(root, 'data')];
+        if (args.refresh === true) params.push('--refresh');
+        if (args.offline === true) params.push('--offline');
+        const result = await runPython(ctx, config, exec, 'fetch_noaa_oisst.py', params, 'sst_prepare_data');
+        const payload = result.result;
+        const mode = ['local-cache', 'download', 'offline'].includes(payload?.mode) ? payload.mode
+          : args.offline === true ? 'offline' : 'download';
+        if (!result.ok || payload?.status !== 'ok') {
+          const error = result.error ?? { category: 'DOWNLOAD_PROTOCOL_ERROR',
+            message: '数据准备没有返回可确认成功的最终JSON。', retryable: false,
+            action: '查看本次日志；不要开始分析或无条件重试下载。' };
+          return { ...result, ok: false, mode, error, artifacts: [],
+            note: '准备未成功。报告error的类别与建议；只有用户明确要求继续时才重试，不用分析工具代替数据准备。' };
         }
-        return { ...result, result: checks, files: ['point_A_monthly.csv', 'point_B_monthly.csv', 'point_B_gap_demo.csv'],
+        let checks = payload.validation;
+        try { if (!Array.isArray(checks)) checks = readJson(projectPath(root, 'data', 'data_validation.json')); }
+        catch { checks = null; }
+        if (!Array.isArray(checks) || checks.length !== 2 || !checks.every(row => row?.complete === true && row.monthly_rows === 528)) {
+          return { ...result, ok: false, mode, validation: checks, artifacts: [],
+            error: { category: 'DATA_VALIDATION_FAILED', message: '完整性报告没有证明两个格点均有528个完整月均值。',
+              retryable: false, action: '查看验证报告并解决数据完整性问题后，再请求准备或分析。' } };
+        }
+        return { ...result, mode, validation: checks,
+          files: ['point_A_monthly.csv', 'point_B_monthly.csv', 'point_B_gap_demo.csv'],
           source: 'https://www.ncei.noaa.gov/products/optimum-interpolation-sst',
           note: '月数据和配套metadata已生成；分析仍会核对SHA、单位与基准期。' };
-      }
-      return { ...result, note: '准备未成功。不要使用部分数据声称完成分析；可根据日志再请求续传。' };
+      });
     }, 1800000),
     tool('sst_compare_results', '实际比较两次结果，检查仅样式改变或基准期变更是否符合数值规则。', {
       first: { type: 'string', required: true, description: '第一次输出子目录名。' },

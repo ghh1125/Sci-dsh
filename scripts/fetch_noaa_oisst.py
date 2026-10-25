@@ -14,13 +14,23 @@ import csv
 import datetime as dt
 import hashlib
 import io
+import importlib.util
 import json
 import math
+import os
 from pathlib import Path
-import ssl
+import sys
+import tempfile
 import threading
+import time
 import urllib.parse
-import urllib.request
+
+if __package__:
+    from .download_network import (fetch_bytes, classify_error, DownloadCancelled,
+                                   NetworkDeadlineExceeded, DataResponseError)
+else:
+    from download_network import (fetch_bytes, classify_error, DownloadCancelled,
+                                  NetworkDeadlineExceeded, DataResponseError)
 
 POINTS = {"A": (18.125, 114.125), "B": (15.125, 114.125)}
 START_YEAR, END_YEAR = 1982, 2025
@@ -33,8 +43,40 @@ NOW = lambda: dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 STOP = threading.Event()
 
 
-class DownloadCancelled(Exception):
-    pass
+class SourceFetchError(Exception):
+    def __init__(self, year, dataset, failures):
+        self.year, self.dataset, self.failures = year, dataset, failures
+        super().__init__(f"{year}: 无法取得 NOAA 年度数据；请查看下载诊断。")
+
+
+def atomic_bytes(path, body):
+    """Promote one complete file; interrupted writes never become valid cache."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix="." + path.name + "-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(body)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def save_json(path, value):
+    atomic_bytes(path, (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+
+
+def error_details(exc):
+    if isinstance(exc, SourceFetchError):
+        categories = {item["category"] for item in exc.failures}
+        same_reason = len(categories) == 1
+        first = exc.failures[0] if exc.failures else {}
+        return {"category": first["category"] if same_reason else "source_unavailable",
+                "message": f"{exc.year}: " + first["message"] if same_reason else str(exc),
+                "retryable": any(item["retryable"] for item in exc.failures),
+                "action": first["action"] if same_reason else "按 failures 中的具体提示处理；修复网络后重新准备，成功缓存会保留。",
+                "year": exc.year, "dataset": exc.dataset, "failures": exc.failures}
+    return classify_error(exc)
 
 
 def check_cancelled():
@@ -46,27 +88,8 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def tls_context():
-    try:
-        import certifi
-        return ssl.create_default_context(cafile=certifi.where())
-    except ImportError:
-        return ssl.create_default_context()
-
-
-def fetch(url: str, timeout: int) -> bytes:
-    check_cancelled()
-    req = urllib.request.Request(url, headers={"User-Agent": "Scientific-Agent-OISST-Teaching-Demo/1.0"})
-    with urllib.request.urlopen(req, context=tls_context(), timeout=timeout) as response:
-        chunks = []
-        while True:
-            check_cancelled()
-            chunk = response.read(65536)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        check_cancelled()
-        return b"".join(chunks)
+def fetch(url: str, timeout: int, deadline=None) -> bytes:
+    return fetch_bytes(url, timeout, STOP, deadline=deadline)
 
 
 def query_url(base: str, year: int, dataset: str = DATASET) -> str:
@@ -106,43 +129,70 @@ def parse_response(body: bytes, year: int):
 
 
 def obtain_year(year: int, raw: Path, timeout: int, refresh: bool,
-                dataset: str = DATASET):
+                dataset: str = DATASET, *, attempts=3, deadline=None, offline=False):
     check_cancelled()
     version_tag = "v21" if dataset == DATASET else "v2"
     target = raw / f"oisst_{version_tag}_{year}_two_points.csv"
     provenance = target.with_suffix(".source.json")
     if target.exists() and provenance.exists() and not refresh:
-        body = target.read_bytes()
-        info = json.loads(provenance.read_text(encoding="utf-8"))
-        if info.get("sha256") != sha256(target):
-            raise ValueError(f"Cached source checksum mismatch: {target}")
-        return year, parse_response(body, year), info
+        try:
+            body = target.read_bytes()
+            info = json.loads(provenance.read_text(encoding="utf-8"))
+            if info.get("sha256") != hashlib.sha256(body).hexdigest() or info.get("dataset_id") != dataset:
+                raise ValueError("Cached source checksum or dataset mismatch")
+            return year, parse_response(body, year), info
+        except (OSError, ValueError, TypeError, AttributeError):
+            if offline:
+                raise DataResponseError(f"{year}: 本地年度缓存损坏，离线模式不联网修复")
+            print(f"{year}: 缓存未通过校验，只重新获取这个年份。", file=sys.stderr, flush=True)
+    if offline:
+        raise DataResponseError(f"{year}: 缺少可验证的本地年度缓存，离线模式不下载")
     errors = []
-    for attempt in range(2):
-        for base in BASES:
+    active = list(BASES)
+    for attempt in range(attempts):
+        retry = []
+        for base in active:
+            check_cancelled()
+            if deadline is not None and time.monotonic() >= deadline:
+                raise NetworkDeadlineExceeded("下载时间预算已到")
             url = query_url(base, year, dataset)
             try:
-                body = fetch(url, timeout)
-                parsed = parse_response(body, year)
+                body = fetch(url, timeout, deadline)
+                try:
+                    parsed = parse_response(body, year)
+                except (ValueError, UnicodeError, OverflowError) as exc:
+                    raise DataResponseError("NOAA 返回的数据格式、单位、日期或坐标未通过校验") from exc
                 check_cancelled()
-                target.write_bytes(body)
+                atomic_bytes(target, body)
                 info = {"source_url": url, "retrieved_at": NOW(),
                         "dataset_id": dataset, "file": target.name,
-                        "sha256": sha256(target), "records": len(parsed),
+                        "sha256": hashlib.sha256(body).hexdigest(), "records": len(parsed),
                         "response_filtered_to_requested_year": True}
-                provenance.write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
+                save_json(provenance, info)
                 return year, parsed, info
-            except DownloadCancelled:
+            except (DownloadCancelled, NetworkDeadlineExceeded):
                 raise
             except Exception as exc:
-                errors.append(f"{base}: {type(exc).__name__}: {exc}")
-        if attempt == 0:
-            if STOP.wait(2):
+                detail = {**classify_error(exc), "host": urllib.parse.urlsplit(base).hostname,
+                          "attempt": attempt + 1}
+                errors.append(detail)
+                print(f"{year} {detail['host']}: {detail['message']}", file=sys.stderr, flush=True)
+                if detail["retryable"]:
+                    retry.append(base)
+        active = retry
+        if not active:
+            break
+        if attempt + 1 < attempts:
+            delay = min(2 ** attempt, 8)
+            if deadline is not None:
+                delay = min(delay, max(0, deadline - time.monotonic()))
+            if STOP.wait(delay):
                 raise DownloadCancelled("Download cancelled")
-    raise RuntimeError(f"Cannot fetch {year}: " + "; ".join(errors))
+    raise SourceFetchError(year, dataset, errors)
 
 
-def obtain_complete_year(year, raw, timeout, refresh, historical_repair):
+def obtain_complete_year(year, raw, timeout, refresh, historical_repair,
+                         *, attempts=3, deadline=None, offline=False):
     """Use documented identical v2 history only for missing pre-2016 records.
 
     NOAA documents v2.1 SST as identical to v2 for Sep 1981–Dec 2015.
@@ -152,15 +202,28 @@ def obtain_complete_year(year, raw, timeout, refresh, historical_repair):
     """
     primary_error = None
     try:
-        _, primary, primary_info = obtain_year(year, raw, timeout, refresh)
+        _, primary, primary_info = obtain_year(year, raw, timeout, refresh,
+            attempts=attempts, deadline=deadline, offline=offline)
         primary_info = dict(primary_info, role="primary_v2.1")
         sources = [primary_info]
-    except DownloadCancelled:
+    except (DownloadCancelled, NetworkDeadlineExceeded):
         raise
-    except Exception as exc:
-        if year >= 2016 or not historical_repair:
+    except DataResponseError:
+        if not offline or year >= 2016 or not historical_repair:
             raise
-        primary_error = str(exc)
+        # A completed online run may have cached only v2 when the historical
+        # v2.1 endpoint returned 404/410. The same documented equivalence also
+        # permits a cache-only rebuild, with no network or guessed values.
+        primary_error = {"category": "primary_cache_unavailable",
+                         "message": "离线 v2.1 缓存缺失或未通过校验；仅核对已缓存的等价历史 v2。"}
+        primary, sources = [], []
+    except SourceFetchError as exc:
+        # A different dataset on the same servers cannot repair TLS, DNS, proxy
+        # or timeout failures. Try historical v2 only for an absent v2.1 dataset.
+        absent = bool(exc.failures) and all(item.get("http_status") in (404, 410) for item in exc.failures)
+        if year >= 2016 or not historical_repair or not absent:
+            raise
+        primary_error = error_details(exc)
         primary, sources = [], []
     first, stop = dt.date(year, 1, 1), dt.date(year + 1, 1, 1)
     expected_keys = {
@@ -172,7 +235,7 @@ def obtain_complete_year(year, raw, timeout, refresh, historical_repair):
     if missing_keys and year <= 2015 and historical_repair:
         check_cancelled()
         _, historical, historical_info = obtain_year(year, raw, timeout, refresh,
-                                                     dataset="ncdcOisst2Agg")
+            dataset="ncdcOisst2Agg", attempts=attempts, deadline=deadline, offline=offline)
         historical_values = {(date, lat, lon): value
                              for date, lat, lon, value in historical}
         common_valid = [key for key in selected.keys() & historical_values.keys()
@@ -315,65 +378,189 @@ def create_gap_fixture(data: Path, missing_month: str = "2000-02"):
     return {"fixture": target.name, "rows": len(kept), "removed_month": missing_month}
 
 
-def main():
+def local_validation(data):
+    """Reuse verified monthly files even when raw caches were not copied.
+
+    This calls only the shared input validator: no plotting or model calls.
+    Invalid/incomplete local files never become a successful offline result.
+    """
+    script = Path(__file__).resolve().parents[1] / "skill-templates/ocean-sst-analysis/scripts/analyze_sst.py"
+    spec = importlib.util.spec_from_file_location("sst_input_validator", script)
+    validator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(validator)
+    report = []
+    for point, coordinates in POINTS.items():
+        rows, metadata, _ = validator.load_and_validate(
+            data / f"point_{point}_monthly.csv", data / f"point_{point}.metadata.json", (1991, 2020))
+        if (len(rows) != 528 or metadata.get("start_month") != "1982-01"
+                or metadata.get("end_month") != "2025-12"
+                or (metadata["lat"], metadata["lon"]) != coordinates
+                or metadata.get("complete") is not True
+                or metadata.get("monthly_count") != 528
+                or metadata.get("product_url") != PRODUCT_PAGE
+                or not isinstance(metadata.get("source_files"), list) or not metadata["source_files"]):
+            raise DataResponseError("本地月数据未满足本演示的完整性和来源契约")
+        expected = (dt.date(2026, 1, 1) - dt.date(1982, 1, 1)).days
+        report.append({"point_id": point, "complete": True, "monthly_rows": len(rows),
+                       "present_days": expected, "expected_days": expected,
+                       "missing_dates": [], "invalid_dates": [], "incomplete_months": []})
+    return report
+
+
+def available_year_cache(raw, year, *, allow_historical=False):
+    tags = ["v21"] + (["v2"] if allow_historical and year <= 2015 else [])
+    return any((raw / f"oisst_{tag}_{year}_two_points.csv").is_file()
+               and (raw / f"oisst_{tag}_{year}_two_points.source.json").is_file() for tag in tags)
+
+
+def prepare(args):
+    STOP.clear()
+    data = args.data_dir.resolve()
+    data.mkdir(parents=True, exist_ok=True)
+    started = NOW()
+    deadline = time.monotonic() + args.budget_seconds
+    status_file = data / "download_status.json"
+    failure_file = data / "download_failures.json"
+    completed = []
+
+    def record(result, phase):
+        value = {**result, "phase": phase, "started_at": started, "updated_at": NOW(),
+                 "completed_years": sorted(completed),
+                 "source_hosts": [urllib.parse.urlsplit(base).hostname for base in BASES]}
+        save_json(status_file, value)
+        if result.get("status") == "error":
+            save_json(failure_file, value)
+        return value
+
+    record({"status": "preparing", "mode": "offline" if args.offline else "download"}, "local-check")
+    if not args.refresh:
+        try:
+            validation = local_validation(data)
+        except (OSError, ValueError, TypeError, KeyError):
+            validation = None
+        if validation is not None:
+            mode = "offline" if args.offline else "local-cache"
+            try:
+                fixture = None if args.no_gap_fixture else create_gap_fixture(data)
+                save_json(data / "data_validation.json", validation)
+                failure_file.unlink(missing_ok=True)
+                return record({"status": "ok", "mode": mode,
+                               "validation": validation, "fixture": fixture,
+                               "note": "已复核现有 CSV、metadata、日覆盖、来源与完整基准期；本次没有联网。"}, "complete")
+            except Exception as exc:
+                return record({"status": "error", "mode": mode, "error": error_details(exc)}, "local-check")
+
+    raw = data / "raw"
+    raw.mkdir(parents=True, exist_ok=True)
+    years = list(range(START_YEAR, END_YEAR + 1))
+    # Check one missing year first rather than queue 44 years against an
+    # unreachable server. Prefer the newest missing year to avoid v2 fallback.
+    missing = [year for year in reversed(years) if args.refresh or not available_year_cache(
+        raw, year, allow_historical=args.offline and not args.no_historical_repair)]
+    first_year = missing[0] if missing else END_YEAR
+    if args.offline and missing:
+        return record({"status": "error", "mode": "offline", "error": {
+            "category": "offline_unavailable", "message": "本地月数据未通过校验，年度原始缓存也不完整。",
+            "retryable": False, "action": "从已成功准备数据的电脑复制完整 data 目录，或取消 offline 后联网准备。"},
+            "missing_years": missing}, "local-check")
+
+    def obtain(year, limit):
+        return obtain_complete_year(year, raw, args.timeout, args.refresh,
+            not args.no_historical_repair, attempts=args.attempts, deadline=limit, offline=args.offline)
+
+    combined, sources, failures = [], [], []
+    mode = "offline" if args.offline else "download"
+    record({"status": "preparing", "mode": mode, "probe_year": first_year}, "first-year")
+    try:
+        _, rows, info = obtain(first_year, min(deadline, time.monotonic() + 180))
+        combined.extend(rows)
+        sources.extend(info)
+        completed.append(first_year)
+        print(f"{first_year}: {len(rows)} daily point records", file=sys.stderr, flush=True)
+    except (Exception, KeyboardInterrupt) as exc:
+        STOP.set()
+        detail = classify_error(DownloadCancelled()) if isinstance(exc, KeyboardInterrupt) else error_details(exc)
+        return record({"status": "error", "mode": mode, "error": detail,
+                       "failed_year": first_year, "remaining_years": years,
+                       "note": "首个年份未取得有效响应，未排队下载其余年份。已成功的原始缓存保留。"}, "first-year")
+
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=args.workers)
+    futures = {}
+    try:
+        futures = {pool.submit(obtain, year, deadline): year for year in years if year != first_year}
+        for future in concurrent.futures.as_completed(futures):
+            year = futures[future]
+            try:
+                _, rows, info = future.result()
+                combined.extend(rows)
+                sources.extend(info)
+                completed.append(year)
+                print(f"{year}: {len(rows)} daily point records", file=sys.stderr, flush=True)
+                record({"status": "preparing", "mode": mode}, "annual-data")
+            except Exception as exc:
+                failures.append({"year": year, **error_details(exc)})
+                record({"status": "error", "mode": mode, "error": failures[0],
+                        "failures": failures}, "annual-data")
+                # Do not keep queueing requests after a source/network failure.
+                STOP.set()
+                for pending in futures:
+                    pending.cancel()
+                break
+    except KeyboardInterrupt:
+        STOP.set()
+        failures.append(classify_error(DownloadCancelled()))
+        for pending in futures:
+            pending.cancel()
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+    if failures:
+        return record({"status": "error", "mode": mode, "error": failures[0],
+                       "failures": failures, "remaining_years": sorted(set(years) - set(completed)),
+                       "note": "成功缓存保留；修复网络后继续准备，不必重新下载已通过校验的年份。"}, "annual-data")
+    try:
+        sources.sort(key=lambda source: source["file"])
+        validation = [build_point(point, combined, sources, data) for point in POINTS]
+        save_json(data / "data_validation.json", validation)
+        if not all(point["complete"] for point in validation):
+            return record({"status": "error", "mode": mode, "validation": validation, "error": {
+                "category": "incomplete_data", "message": "数据源仍有缺日或无效值，未通过完整性检查。",
+                "retryable": False, "action": "检查 data_validation.json；不插值、不生成伪造海温或科学图片。"}}, "validation")
+        fixture = None if args.no_gap_fixture else create_gap_fixture(data)
+        failure_file.unlink(missing_ok=True)
+        return record({"status": "ok", "mode": mode, "validation": validation, "fixture": fixture}, "complete")
+    except Exception as exc:
+        return record({"status": "error", "mode": mode, "error": error_details(exc)}, "validation")
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=Path(__file__).resolve().parents[1] / "data")
-    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--timeout", type=int, default=60)
+    parser.add_argument("--attempts", type=int, default=3, help="Maximum attempts per source for transient errors only")
+    parser.add_argument("--budget-seconds", type=int, default=1200, help="Total network budget, shorter than the Harness tool timeout")
+    parser.add_argument("--offline", action="store_true", help="Validate local monthly data or rebuild from raw caches without any network request")
     parser.add_argument("--refresh", action="store_true", help="Re-fetch and overwrite cached public source responses")
     parser.add_argument("--no-historical-repair", action="store_true",
                         help="Do not supplement pre-2016 mirror gaps with NOAA's documented identical v2 history")
     parser.add_argument("--no-gap-fixture", action="store_true",
                         help="Skip the deliberately incomplete B_gap teaching copy")
-    args = parser.parse_args()
-    if args.workers < 1 or args.workers > 8 or args.timeout < 1:
-        parser.error("--workers must be 1..8 and --timeout must be positive")
-    data = args.data_dir.resolve()
-    raw = data / "raw"
-    raw.mkdir(parents=True, exist_ok=True)
-    combined, sources, failures = [], [], []
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=args.workers)
-    future_years = {}
+    args = parser.parse_args(argv)
+    if not 1 <= args.workers <= 4 or not 1 <= args.timeout <= 120 or not 1 <= args.attempts <= 4 or not 60 <= args.budget_seconds <= 1500:
+        parser.error("workers: 1..4; timeout: 1..120; attempts: 1..4; budget-seconds: 60..1500")
+    if args.offline and args.refresh:
+        parser.error("--offline cannot be combined with --refresh")
     try:
-        future_years = {pool.submit(obtain_complete_year, year, raw, args.timeout,
-                                   args.refresh, not args.no_historical_repair): year
-                        for year in range(START_YEAR, END_YEAR + 1)}
-        for future in concurrent.futures.as_completed(future_years):
-            year = future_years[future]
-            try:
-                _, rows, info = future.result()
-                combined.extend(rows)
-                sources.extend(info)
-                print(f"{year}: {len(rows)} daily point records", flush=True)
-            except Exception as exc:
-                failures.append({"year": year, "error": str(exc)})
-                print(f"{year}: FAILED {exc}", flush=True)
+        result = prepare(args)
     except KeyboardInterrupt:
         STOP.set()
-        for future in future_years:
-            future.cancel()
-        print("Cancelled. No new requests will start. Waiting for any in-flight HTTPS operation to reach its timeout; completed raw caches are retained.", flush=True)
-        raise SystemExit(130)
-    finally:
-        # Running network calls have a finite timeout and check STOP before any
-        # retry or file write. Never leave a background downloader after Ctrl-C.
-        pool.shutdown(wait=True, cancel_futures=True)
-    if failures:
-        (data / "download_failures.json").write_text(json.dumps(failures, indent=2) + "\n", encoding="utf-8")
-        raise SystemExit("Some source requests failed; cached successes are retained. Re-run to resume.")
-    sources.sort(key=lambda s: s["file"])
-    report = [build_point(p, combined, sources, data) for p in POINTS]
-    (data / "data_validation.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    for point in report:
-        print(json.dumps({k: v for k, v in point.items() if not isinstance(v, list)}), flush=True)
-    if not all(p["complete"] for p in report):
-        raise SystemExit("NOAA mirror has missing/invalid dates. See data_validation.json; incomplete months remain blank.")
-    failures_path = data / "download_failures.json"
-    if failures_path.exists():
-        failures_path.unlink()
-    if not args.no_gap_fixture:
-        print(json.dumps(create_gap_fixture(data)), flush=True)
+        result = {"status": "error", "mode": "offline" if args.offline else "download",
+                  "error": classify_error(DownloadCancelled())}
+    except Exception as exc:
+        result = {"status": "error", "mode": "offline" if args.offline else "download", "error": error_details(exc)}
+    print(json.dumps(result, ensure_ascii=False), flush=True)
+    return 0 if result["status"] == "ok" else 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

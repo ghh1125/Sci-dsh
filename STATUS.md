@@ -2,7 +2,9 @@
 
 更新时间：2026-10-25（Asia/Shanghai）
 
-## 已完成
+本文保留 Windows 设备在提交 `987104e` 时提供的运行记录。本次修复只作静态编辑和审查，未运行测试、下载数据、调用模型 API 或生成科学结果。历史通过数字不代表修复后的复测结果。
+
+## 已完成的历史验证（987104e）
 
 - 已在 Windows 本机完成仓库克隆、Node 依赖安装和 Python 虚拟环境配置。
 - 已验证 DSH 版本 `0.1.0-rc.6`、工具包版本 `0.1.0-rc.7`。
@@ -13,7 +15,7 @@
 - 完整 Python 测试当前为 35/38 通过，剩余 3 个失败都集中在 Windows 下 ZIP 测试的同一处：`zipfile` 会把测试输入的 `scripts\\escape.py` 规范化为 `scripts/escape.py`，导致该恶意路径样例没有按测试预期保留反斜杠；随后同一测试中的 `.env` 和 `scripts/__pycache__` 检查因目标目录已被前一个样例创建而连带失败。生产路径校验仍拒绝 `..`、绝对路径、隐藏文件和缓存目录。
 - `npm run web -- --port 3080` 已启动，网页内测声明的确认状态可以保存，刷新后不会重复弹出。
 
-## 当前阻塞
+## 上次运行的阻塞记录
 
 第 6 步网页数据准备未通过。网页中实际调用了 `sst_analyze`，但三个输入文件都不存在：
 
@@ -54,12 +56,30 @@ data/point_B_gap_demo.csv
 - `missing-month` 的缺少 `2000-02` 报告
 - 本次流程最终导出的 Skill ZIP
 
-## 继续条件
+## 本次修复（代码已修改，尚未运行复测）
 
-在能访问 NOAA ERDDAP 的网络环境中运行：
+- 下载 TLS 保留系统默认信任，追加 certifi；支持数据专用 HTTP/HTTPS 代理与机构 PEM CA，仍强制证书验证。
+- 对网络、SSL、代理认证、HTTP 状态和数据格式错误分类；只对暂时性故障有限重试，不把故障页当成 CSV。
+- 首个待获取年份未成功时，停止批量下载；后续失败保留已完成年度缓存，及时保存状态与安全诊断。时间预算早于 Harness 工具超时；系统 DNS 行为仍可能影响实际退出时间。
+- 支持完整本地月数据直接复核复用，以及 `offline=true` 从完整本地数据或年度缓存准备；缺数据时不制造样例值。
+- DSH 明确区分准备与分析：缺输入时返回 `DATA_NOT_PREPARED` 和下一步工具；数据准备与分析互斥，避免并行操作把半成品当作可用数据。
+- 取消或进程等待失败时尽量保存已收集日志；下载子进程仅接收必要网络设置，不将代理凭据放入模型参数或诊断。
+- Windows ZIP 测试保留真实原始危险文件名、隔离各样例；生产导入先检查 `orig_filename`，再检查规范化文件名一致性，防止反斜杠/NUL 在 Windows 上被隐藏。
+- 补充网络、准备阶段、缺输入和 Windows ZIP 相关回归用例，但**没有执行新增或现有测试**。
+
+没有实际重新下载验证，所以不能声称 NOAA 网络已经恢复，也不能把 Issue #1 视为完成端到端验收。图片、样式比较和 Skill ZIP 仍待真实数据准备成功后生成。
+
+## 换设备更新与继续操作
+
+在项目根目录更新代码，重新启动 Harness：
 
 ```bash
-npm run data:prepare -- --workers 2 --timeout 90
+git pull --ff-only
+npm run web
 ```
 
-确认 `data/` 中的三个 CSV 和对应 metadata 通过完整性校验后，再打开网页并从第 6 步重新开始。不要把 API key、真实数据或 `outputs/` 目录提交到 GitHub。
+在网页输入：“调用 sst_prepare_data，workers=1，timeout_seconds=90。失败时展示 error.category、message 和 action，不调用分析。”
+
+如果仍是网络/SSL 失败，按 README 配置本地 `SCI_DSH_DATA_PROXY` 或机构 `SCI_DSH_DATA_CA_BUNDLE` 并重启；也可复制另一台已准备成功的电脑的完整 `data/` 后，请求 `offline=true`。API 网关不是数据下载代理。
+
+完整性通过后再继续分析 A、创建 Skill、修改与比较、复用 B 和缺月教学。缺文件不等于检出了 `2000-02` 缺月。后续自行执行 `npm run test:analysis` 和 `npm run test:harness` 才能取得本次复测数字。不要提交 API key、代理凭据、真实数据或运行输出。

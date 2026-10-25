@@ -69,15 +69,26 @@ class SkillLifecycleTests(unittest.TestCase):
     def create(self):
         return lifecycle.create_draft(self.root, "outputs/success", NAME)
 
-    def archive(self, filename="skill.zip", extra=()):
-        folder = self.root / "dist"
+    def archive(self, filename="skill.zip", extra=(), *, root=None, raw_names=False):
+        folder = (self.root if root is None else root) / "dist"
         folder.mkdir(exist_ok=True)
         path = folder / filename
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
             bundle.writestr("SKILL.md", self.skill)
             bundle.writestr("scripts/analyze_sst.py", self.script)
             for name, body in extra:
-                bundle.writestr(name, body)
+                if raw_names:
+                    # ZipInfo.__init__ normalizes Windows separators and strips
+                    # NUL suffixes. Set these fields after construction so both
+                    # ZIP headers actually contain the unsafe filename bytes.
+                    entry = zipfile.ZipInfo("fixture-placeholder")
+                    entry.filename = name
+                    entry.orig_filename = name
+                    entry.compress_type = zipfile.ZIP_DEFLATED
+                    entry.external_attr = (stat.S_IFREG | 0o644) << 16
+                    bundle.writestr(entry, body)
+                else:
+                    bundle.writestr(name, body)
         return path
 
     def test_create_records_verified_evidence_without_device_paths(self):
@@ -180,12 +191,25 @@ class SkillLifecycleTests(unittest.TestCase):
         self.assertFalse(any("-stage-" in p.name for p in installed.parent.iterdir()))
 
     def test_zip_rejects_traversal_absolute_and_environment_entries(self):
-        for index, label in enumerate(("../escape.txt", "/absolute.txt", "C:/absolute.txt", "scripts\\escape.py", ".env", "scripts/__pycache__/x.pyc")):
-            with self.subTest(label=label):
-                archive = self.archive(f"bad-{index}.zip", [(label, b"bad")])
+        labels = ("../escape.txt", "/absolute.txt", "C:/absolute.txt",
+                  "scripts\\escape.py", "references/safe.md\x00ignored",
+                  ".env", "scripts/__pycache__/x.pyc")
+        for label in labels:
+            # A rejected assertion must not leave an installed Skill that can
+            # contaminate the remaining cases on any operating system.
+            with self.subTest(label=label), tempfile.TemporaryDirectory(dir=self.root) as temporary:
+                case_root = Path(temporary)
+                archive = self.archive("bad.zip", [(label, b"bad")],
+                                       root=case_root, raw_names=True)
+                self.assertEqual(archive.read_bytes().count(label.encode("ascii")), 2,
+                                 "unsafe filename must be present in both ZIP headers")
+                with zipfile.ZipFile(archive) as bundle:
+                    self.assertEqual(bundle.infolist()[-1].orig_filename, label,
+                                     "fixture must preserve the raw archive filename")
                 with self.assertRaises(lifecycle.LifecycleError):
-                    lifecycle.install_skill(self.root, NAME, archive=str(archive))
-                self.assertFalse((self.root / "skills" / NAME).exists())
+                    lifecycle.install_skill(case_root, NAME, archive=str(archive))
+                self.assertFalse((case_root / "skills" / NAME).exists())
+                self.assertFalse((case_root / "escape.txt").exists())
         self.assertFalse((self.root / "escape.txt").exists())
 
     def test_zip_rejects_duplicate_and_case_colliding_members(self):

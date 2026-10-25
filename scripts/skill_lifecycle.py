@@ -191,7 +191,12 @@ def read_archive(archive: Path, name: str) -> dict[str, bytes]:
             if len(members) > MAX_FILES * 2:
                 raise LifecycleError("ZIP 条目数量超限")
             for info in members:
-                label = member_name(info.filename)
+                # ZipInfo can normalize Windows backslashes and truncate at a
+                # NUL before assigning filename. Validate the original bytes'
+                # decoded name first so those unsafe paths cannot be hidden.
+                label = member_name(info.orig_filename)
+                if info.orig_filename != info.filename or label != member_name(info.filename):
+                    raise LifecycleError("ZIP 原始文件名被规范化，拒绝不一致路径")
                 if label.casefold() in seen:
                     raise LifecycleError("ZIP 含重复或大小写冲突条目")
                 seen.add(label.casefold())

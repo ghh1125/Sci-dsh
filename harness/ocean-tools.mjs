@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { makeWorkflowTools } from './workflow-tools.mjs';
 import { mountGallery } from './gallery.mjs';
-import { projectPath, skillBodyHash, waitForSkillBody } from './tool-common.mjs';
+import { projectPath, skillBodyHash, waitForSkillBody, withDataOperation } from './tool-common.mjs';
 export { skillBodyHash } from './tool-common.mjs';
 
 const moduleName = process.env.SCI_DSH_TOOLS_MODULE;
@@ -20,6 +20,14 @@ const CASE_FILES = Object.freeze({
 });
 
 const STYLE_LINE = /^默认演示样式：(default|presentation)[ \t]*$/gm;
+
+export function missingDataFiles(root, caseName) {
+  if (!Object.hasOwn(CASE_FILES, caseName)) throw new Error('case 必须是 A、B 或 missing-month。');
+  return CASE_FILES[caseName].filter(name => {
+    const file = projectPath(root, 'data', name);
+    return !fs.existsSync(file) || !fs.lstatSync(file).isFile();
+  });
+}
 
 export function readDefaultStyle(root) {
   const installed = path.join(root, 'skills/ocean-sst-analysis/SKILL.md');
@@ -70,7 +78,7 @@ function appendEvidence(filename, row) {
 export function makeAnalysisTool(ctx, config) {
   return defineTool({
     name: 'sst_analyze',
-    description: '运行月海温分析。已安装ocean-sst-analysis时先加载它；首次未安装时可直接使用项目基础工具完成分析，再创建Skill。支持A、B、missing-month，返回真实结果和图片路径。',
+    description: '分析已经准备好的月海温CSV与metadata，不负责下载。缺数据时返回DATA_NOT_PREPARED并指向sst_prepare_data，不应换案例反复尝试。已安装ocean-sst-analysis时先加载；首次未安装时可用基础工具。',
     parameters: {
       case: { type: 'string', required: true, enum: ['A', 'B', 'missing-month'], description: '选择演示数据。' },
       style: { type: 'string', enum: ['default', 'presentation'], description: '本次绘图样式；省略时读取 Skill 的“默认演示样式”行，不改变算法。' },
@@ -80,7 +88,18 @@ export function makeAnalysisTool(ctx, config) {
     },
     output: { schema: { type: 'json' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }] },
     timeoutMs: 120000,
-    async execute(args, exec) {
+    execute: (args, exec) => withDataOperation(config.projectRoot, 'analyze', async () => {
+      const missing = missingDataFiles(config.projectRoot, args.case);
+      if (missing.length > 0) {
+        appendEvidence(config.evidencePath, { event: 'analysis-blocked', callId: exec.callId ?? null,
+          sessionId: exec.agent?.session?.id ?? null, case: args.case,
+          reason: 'DATA_NOT_PREPARED', missing });
+        return { ok: false, code: 'DATA_NOT_PREPARED', case: args.case, missing,
+          error: { category: 'DATA_NOT_PREPARED', message: '所选案例的CSV或metadata尚未准备好，未运行分析。',
+            retryable: false, action: '用户要求准备数据时调用sst_prepare_data，成功后再分析同一案例。' },
+          nextTool: 'sst_prepare_data', exitCode: null, artifacts: [], diagnostics: [],
+          note: '这是文件尚未准备，不是缺月教学数据的校验结果；不要换成B或missing-month重复尝试。' };
+      }
       const invocation = buildInvocation(config.projectRoot, config.python, args);
       fs.mkdirSync(invocation.output, { recursive: true });
       const command = await ctx.subprocess.resolveExecutable(invocation.argv[0], undefined, exec.signal);
@@ -134,7 +153,7 @@ export function makeAnalysisTool(ctx, config) {
         style: invocation.style, baseline: invocation.baseline, ok: result.ok, exitCode: outcome.exitCode,
         artifactCount: result.artifacts.length, issues: report?.issues ?? summary?.issues ?? [] });
       return result;
-    },
+    }),
     presentCall: args => ({ card: 'generic', title: `海温分析：${args.case}`, kind: 'execute', rawInput: args }),
   });
 }

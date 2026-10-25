@@ -6,6 +6,8 @@
 
 > **交付状态：本机安装与网页启动已验证，端到端科学演示仍被数据获取阻塞。** Windows 本机已启动 Harness、验证模型 API 与网页流程，并修复网页内测声明无法保存的问题；但 NOAA ERDDAP 数据下载未成功，A、B 和缺月教学 CSV 尚未生成，因此没有把缺失数据当作科学结果。详细记录见 [STATUS.md](STATUS.md)。仓库没有 API 密钥，也没有用虚构数据制作的预览图。
 
+本次针对 Issue #1 补上下载容错、错误诊断、离线数据复用、数据准备前置检查和 Windows ZIP 原始路径校验。**这些修复尚未运行复测**，不把以前版本的通过数字当作本次通过结果。
+
 ## 1. 需求落实清单
 
 | 原要求 | 已写入的功能 | 如何操作 |
@@ -94,7 +96,7 @@ npm run web -- --port 3080
 
 在 Harness 输入：
 
-> 查看当前准备状态。如果海温数据还没有准备好，请下载并准备两个格点的数据和缺月教学副本，使用 2 个并发、单次请求超时 90 秒。完成后展示来源、覆盖期和完整性报告；失败就报告原因，不进入分析。
+> 调用 sst_status 查看状态，然后调用 sst_prepare_data 准备两个格点的数据和缺月教学副本，workers=1、timeout_seconds=90。已有完整数据先校验复用。成功后展示来源和完整性报告；失败就展示 error.category、message 和 action，不调用 sst_analyze。
 
 预期调用：`sst_status → sst_prepare_data`。展示两个格点各 **528 个月**的完整性结果。已有文件不代表已通过完整性校验，首次分析仍会严格复查。
 
@@ -107,6 +109,21 @@ npm run web -- --port 3080
 来源是 [NOAA OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) 格点分析产品。它们不是观测站，也不是南海区域平均。脚本下载日值，只有自然月全部日期有效才计算完整月均值。
 
 下载中断可在 Harness 中要求“继续准备数据，复用缓存”。历史镜像缺项仅在 2016 年以前、官方说明 v2 与 v2.1 SST 相同的区间，核对重叠值后使用有出处的 v2 数据补充，并记录具体来源。2016 年以后不采用旧版补充；未解决的缺值会报错。详见 [数据说明](data/README.md)。
+
+下载先检查一个待获取的年份，成功后才处理其余年份；失败时及时返回诊断，不让模型用分析工具代替数据准备。只对超时、连接中断、限流和部分服务器错误退避重试；证书、认证、无效请求和错误 CSV 不盲目重试。成功缓存保留，损坏的年度缓存单独重新获取。默认整体网络预算 1200 秒，首个年份预算最多 180 秒；系统 DNS 阻塞仍可能受操作系统超时影响。
+
+**网络/SSL 报错时这样处理：**
+
+1. 先看 Harness 返回的错误类别。模型 API 可用，不代表能访问 NOAA；`SCI_DSH_BASE_URL` 不能当作数据下载代理。
+2. 如果电脑已有可访问 NOAA 的 HTTP/HTTPS 代理，在本地 `.env` 加 `SCI_DSH_DATA_PROXY=http://127.0.0.1:实际端口`。端口从代理软件读取，不能照抄示例；没有代理就不要填。
+3. 如果机构网络需要额外 CA，把管理员提供的 PEM 证书路径填入 `SCI_DSH_DATA_CA_BUNDLE`。默认会保留系统证书，并追加 certifi；不关闭 HTTPS 校验。
+4. 修改 `.env` 后停止并重新启动 `npm run web`，再发送上面的准备指令。不要设置 `refresh: true`，这样会保留已成功缓存。
+
+如果该网络始终无法访问 NOAA，可以在一台能访问的电脑准备好真实数据，将完整 `data/` 复制到演示电脑，然后在 Harness 输入：
+
+> 调用 sst_prepare_data，offline=true。只校验现有数据，必要时从本地原始缓存重新聚合，不访问任何数据服务器；通过后再继续。
+
+离线模式仍核对 CSV/metadata、坐标、覆盖期、单位、日覆盖和 SHA；缺文件或无效输入会失败，不生成模拟海温。数据离线不等于模型离线，DSH 对话仍需要你的模型 API。两个默认下载域名同属 NOAA 的 ERDDAP 服务，域名轮换不能保证绕过该服务或本机网络故障。
 
 ### ② 先用工具完成一次分析、看到图
 
@@ -256,7 +273,8 @@ npm run test:harness
 | 401 / 403 | 在服务控制台核对 key、额度、模型权限 |
 | 404 或模型不存在 | 核对完整 API 入口和准确模型 ID |
 | 模型只聊天，不调用工具 | 核对代理与模型的工具调用支持；文字回答不算执行 |
-| NOAA 下载慢或中断 | 在 Harness 中请求继续准备，复用缓存、减少并发、延长单次超时 |
+| NOAA 下载慢或中断 | 查看返回的类别和建议；按第 5 节配置数据代理/机构 CA，或复用完整离线数据 |
+| `DATA_NOT_PREPARED` | 先调用 `sst_prepare_data`；分析不会自动下载、补值或把缺文件当作缺月教学成功 |
 | 输出目录非空 | 换新输出名，不重用旧图 |
 | 草稿或 ZIP 已存在 | 继续使用已创建草稿；导出换新包名，默认不覆盖 |
 | 已安装但未发现新 Skill | 按返回提示新建/刷新 Harness 会话再加载 |
@@ -274,6 +292,7 @@ harness/gallery.mjs                     DSH 内部图库
 harness/verify-workflow.mjs             执行证据验收
 scripts/run-harness.mjs                 统一 DSH 启动入口
 scripts/fetch_noaa_oisst.py              NOAA 下载、月聚合、来源记录
+scripts/download_network.py             HTTPS、系统/机构 CA、数据代理、错误分类
 scripts/compare_results.py              两次分析的数值比较
 scripts/skill_lifecycle.py              创建、导出、安装 Skill
 skill-templates/ocean-sst-analysis/      初始方法模板，不是已安装 Skill
