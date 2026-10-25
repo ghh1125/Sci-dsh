@@ -2,7 +2,9 @@
 
 更新时间：2026-10-25（Asia/Shanghai）
 
-本文保留 Windows 设备在提交 `987104e` 时提供的运行记录。本次修复只作静态编辑和审查，未运行测试、下载数据、调用模型 API 或生成科学结果。历史通过数字不代表修复后的复测结果。
+本文保留 Windows 设备在提交 `987104e` 时提供的历史运行记录；下方另列 `090a70e` 拉取后的真实网页复测。历史通过数字不代表本次复测结果。
+
+提交 `090a70e` 拉取后已完成一次真实网页复测：网页调用了 `sst_status`，随后按要求调用 `sst_prepare_data(workers=1, timeout_seconds=90)`。本次模型 API 调用和 NOAA 下载均已实际发生，结果仍为数据下载阶段的 TLS 失败，未进入分析流程。
 
 ## 已完成的历史验证（987104e）
 
@@ -15,7 +17,17 @@
 - 完整 Python 测试当前为 35/38 通过，剩余 3 个失败都集中在 Windows 下 ZIP 测试的同一处：`zipfile` 会把测试输入的 `scripts\\escape.py` 规范化为 `scripts/escape.py`，导致该恶意路径样例没有按测试预期保留反斜杠；随后同一测试中的 `.env` 和 `scripts/__pycache__` 检查因目标目录已被前一个样例创建而连带失败。生产路径校验仍拒绝 `..`、绝对路径、隐藏文件和缓存目录。
 - `npm run web -- --port 3080` 已启动，网页内测声明的确认状态可以保存，刷新后不会重复弹出。
 
-## 上次运行的阻塞记录
+## `090a70e` 实际复测结果
+
+- 工具返回错误类别：`tls`。
+- `retryable: false`，默认策略只执行了 1 次尝试，没有自动重试。
+- 首个失败年份：`2025`；数据集：`ncdcOisst21Agg`。
+- 两个来源主机均在第 1 次尝试失败：`upwell.pfeg.noaa.gov`、`coastwatch.pfeg.noaa.gov`。
+- 处理建议：检查系统时间、信任证书链和代理；机构网络可设置 `SCI_DSH_DATA_CA_BUNDLE` 指向可信 PEM CA，但不能关闭证书校验。
+- `completed_years` 为空，`remaining_years` 仍为 1982–2025 全部年份，没有任何年度原始文件落盘。
+- `data/download_failures.json` 和 `data/download_status.json` 已保存本次安全诊断；A、B CSV、metadata 和缺月副本仍不存在。
+
+## 历史阻塞记录（`987104e`）
 
 第 6 步网页数据准备未通过。网页中实际调用了 `sst_analyze`，但三个输入文件都不存在：
 
@@ -56,7 +68,7 @@ data/point_B_gap_demo.csv
 - `missing-month` 的缺少 `2000-02` 报告
 - 本次流程最终导出的 Skill ZIP
 
-## 本次修复（代码已修改，尚未运行复测）
+## 本次修复与验证范围
 
 - 下载 TLS 保留系统默认信任，追加 certifi；支持数据专用 HTTP/HTTPS 代理与机构 PEM CA，仍强制证书验证。
 - 对网络、SSL、代理认证、HTTP 状态和数据格式错误分类；只对暂时性故障有限重试，不把故障页当成 CSV。
@@ -67,7 +79,7 @@ data/point_B_gap_demo.csv
 - Windows ZIP 测试保留真实原始危险文件名、隔离各样例；生产导入先检查 `orig_filename`，再检查规范化文件名一致性，防止反斜杠/NUL 在 Windows 上被隐藏。
 - 补充网络、准备阶段、缺输入和 Windows ZIP 相关回归用例，但**没有执行新增或现有测试**。
 
-没有实际重新下载验证，所以不能声称 NOAA 网络已经恢复，也不能把 Issue #1 视为完成端到端验收。图片、样式比较和 Skill ZIP 仍待真实数据准备成功后生成。
+本次网页复测实际发起了 NOAA 下载，但首个年份在 TLS 阶段失败，没有成功下载任何年度原始文件。因此不能声称 NOAA 网络已经恢复，也不能把 Issue #1 视为完成端到端验收。图片、样式比较和 Skill ZIP 仍待真实数据准备成功后生成。
 
 ## 换设备更新与继续操作
 
@@ -83,3 +95,4 @@ npm run web
 如果仍是网络/SSL 失败，按 README 配置本地 `SCI_DSH_DATA_PROXY` 或机构 `SCI_DSH_DATA_CA_BUNDLE` 并重启；也可复制另一台已准备成功的电脑的完整 `data/` 后，请求 `offline=true`。API 网关不是数据下载代理。
 
 完整性通过后再继续分析 A、创建 Skill、修改与比较、复用 B 和缺月教学。缺文件不等于检出了 `2000-02` 缺月。后续自行执行 `npm run test:analysis` 和 `npm run test:harness` 才能取得本次复测数字。不要提交 API key、代理凭据、真实数据或运行输出。
+
