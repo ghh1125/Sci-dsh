@@ -2,12 +2,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { makeWorkflowTools } from './workflow-tools.mjs';
+import { mountGallery } from './gallery.mjs';
+import { projectPath, skillBodyHash, waitForSkillBody } from './tool-common.mjs';
+export { skillBodyHash } from './tool-common.mjs';
 
 const moduleName = process.env.SCI_DSH_TOOLS_MODULE;
 const { defineTool } = await import(moduleName ? pathToFileURL(moduleName).href : '@deepseek-ai/dsh-tools');
 
 export const name = 'sci-ocean-tools';
-export const inject = ['tools', 'subprocess'];
+export const inject = ['tools', 'subprocess', 'skills'];
 
 const CASE_FILES = Object.freeze({
   A: ['point_A_monthly.csv', 'point_A.metadata.json'],
@@ -18,7 +22,9 @@ const CASE_FILES = Object.freeze({
 const STYLE_LINE = /^默认演示样式：(default|presentation)[ \t]*$/gm;
 
 export function readDefaultStyle(root) {
-  const text = fs.readFileSync(path.join(root, 'skills/ocean-sst-analysis/SKILL.md'), 'utf8');
+  const installed = path.join(root, 'skills/ocean-sst-analysis/SKILL.md');
+  const text = fs.readFileSync(fs.existsSync(installed) ? installed
+    : path.join(root, 'skill-templates/ocean-sst-analysis/SKILL.md'), 'utf8');
   const matches = [...text.matchAll(STYLE_LINE)];
   if (matches.length !== 1) throw new Error('Skill 必须包含且仅包含一行：默认演示样式：default 或 presentation。');
   return matches[0][1];
@@ -43,11 +49,15 @@ export function buildInvocation(root, python, args) {
     throw new Error('输出目录已存在且非空。请指定新 output；本次没有运行，也不会列出或改写旧结果。');
   }
   const [input, metadata] = CASE_FILES[args.case];
+  const installed = path.join(absoluteRoot, 'skills/ocean-sst-analysis');
+  const skillInstalled = fs.existsSync(path.join(installed, 'SKILL.md'));
+  const source = skillInstalled ? installed : path.join(absoluteRoot, 'skill-templates/ocean-sst-analysis');
   return {
-    argv: [python, path.join(absoluteRoot, 'skills/ocean-sst-analysis/scripts/analyze_sst.py'),
+    argv: [python, path.join(source, 'scripts/analyze_sst.py'),
       '--input', path.join(absoluteRoot, 'data', input), '--metadata', path.join(absoluteRoot, 'data', metadata),
       '--baseline', String(first), String(last), '--output', output, '--style', style],
-    cwd: absoluteRoot, output, case: args.case, style, baseline: [first, last],
+    cwd: absoluteRoot, output, case: args.case, style, baseline: [first, last], skillInstalled,
+    skillBodySha256: skillInstalled ? skillBodyHash(fs.readFileSync(path.join(installed, 'SKILL.md'), 'utf8')) : null,
   };
 }
 
@@ -60,7 +70,7 @@ function appendEvidence(filename, row) {
 export function makeAnalysisTool(ctx, config) {
   return defineTool({
     name: 'sst_analyze',
-    description: '运行项目内固定的月海温分析脚本。先加载 ocean-sst-analysis Skill。只支持随项目提供的 A、B 和 missing-month 三组数据；返回真实退出状态、统计摘要和产物。不能自行修补缺月或更改算法。',
+    description: '运行月海温分析。已安装ocean-sst-analysis时先加载它；首次未安装时可直接使用项目基础工具完成分析，再创建Skill。支持A、B、missing-month，返回真实结果和图片路径。',
     parameters: {
       case: { type: 'string', required: true, enum: ['A', 'B', 'missing-month'], description: '选择演示数据。' },
       style: { type: 'string', enum: ['default', 'presentation'], description: '本次绘图样式；省略时读取 Skill 的“默认演示样式”行，不改变算法。' },
@@ -75,7 +85,10 @@ export function makeAnalysisTool(ctx, config) {
       fs.mkdirSync(invocation.output, { recursive: true });
       const command = await ctx.subprocess.resolveExecutable(invocation.argv[0], undefined, exec.signal);
       invocation.argv[0] = command;
-      appendEvidence(config.evidencePath, { event: 'analysis-start', case: invocation.case, style: invocation.style, baseline: invocation.baseline, output: invocation.output });
+      appendEvidence(config.evidencePath, { event: 'analysis-start', callId: exec.callId ?? null,
+        sessionId: exec.agent?.session?.id ?? null, skillBodySha256: invocation.skillBodySha256,
+        skillRequired: invocation.skillInstalled, case: invocation.case, style: invocation.style,
+        baseline: invocation.baseline, output: invocation.output });
       const child = ctx.subprocess.spawn({
         argv: invocation.argv, cwd: invocation.cwd, signal: exec.signal, graceMs: 1000,
         stdio: { stdin: 'ignore', stdout: { maxBytes: 262144 }, stderr: { maxBytes: 65536 } },
@@ -116,7 +129,8 @@ export function makeAnalysisTool(ctx, config) {
         diagnostics: ['report.json', 'harness-python.stdout.txt', 'harness-python.stderr.txt']
           .map(file => path.join(invocation.output, file)).filter(file => fs.existsSync(file)),
       };
-      appendEvidence(config.evidencePath, { event: 'analysis-end', case: invocation.case, output: invocation.output,
+      appendEvidence(config.evidencePath, { event: 'analysis-end', callId: exec.callId ?? null,
+        sessionId: exec.agent?.session?.id ?? null, case: invocation.case, output: invocation.output,
         style: invocation.style, baseline: invocation.baseline, ok: result.ok, exitCode: outcome.exitCode,
         artifactCount: result.artifacts.length, issues: report?.issues ?? summary?.issues ?? [] });
       return result;
@@ -125,25 +139,32 @@ export function makeAnalysisTool(ctx, config) {
   });
 }
 
-export function makeStyleTool(config) {
+export function makeStyleTool(config, ctx) {
   return defineTool({
     name: 'sst_set_style',
     description: '仅在用户要求修改 Skill 的默认绘图样式时使用。只能把 ocean-sst-analysis/SKILL.md 的单行默认样式以及 --style 示例参数在 default/presentation 之间切换；不改算法或数据。完成后重新加载 Skill。',
     parameters: { style: { type: 'string', required: true, enum: ['default', 'presentation'], description: '新的默认样式。' } },
     output: { schema: { type: 'json' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }] },
-    async execute(args) {
-      const skillPath = path.join(config.projectRoot, 'skills/ocean-sst-analysis/SKILL.md');
+    async execute(args, exec) {
+      const skillPath = projectPath(config.projectRoot, 'skills', 'ocean-sst-analysis', 'SKILL.md');
+      if (!fs.existsSync(skillPath)) throw new Error('请先从成功分析创建并安装Skill，再修改其默认样式。');
       if (fs.lstatSync(skillPath).isSymbolicLink()) throw new Error('不修改符号链接指向的 Skill。');
       const before = readDefaultStyle(config.projectRoot);
       const text = fs.readFileSync(skillPath, 'utf8');
       const updated = text.replace(STYLE_LINE, `默认演示样式：${args.style}`)
         .replace(/--style (?:default|presentation)\b/g, `--style ${args.style}`);
       if (updated !== text) fs.writeFileSync(skillPath, updated, 'utf8');
+      const bodyHash = skillBodyHash(updated);
+      appendEvidence(config.evidencePath, { event: 'style-updated', before, after: args.style,
+        callId: exec.callId ?? null, sessionId: exec.agent?.session?.id ?? null,
+        sha256: createHash('sha256').update(updated).digest('hex'), bodySha256: bodyHash });
+      const ready = await waitForSkillBody(ctx, config, exec, 'ocean-sst-analysis', skillPath, bodyHash);
       const result = { before, after: args.style, changed: updated !== text, skillPath,
+        ready, bodySha256: bodyHash,
         sha256: createHash('sha256').update(updated).digest('hex'),
-        reload: '请再次调用 skill(name="ocean-sst-analysis") 加载新正文；分析时省略 style 即使用此默认值。',
+        reload: ready ? '已确认Harness可读取新正文。请再次调用 skill(name="ocean-sst-analysis") 将其加载到当前会话；分析时省略 style 即使用此默认值。'
+          : '样式已保存，但Harness尚未确认能读取新正文；请刷新/新建会话后加载，不要声称已完成重载。',
         algorithmChanged: false, dataChanged: false };
-      appendEvidence(config.evidencePath, { event: 'style-updated', before, after: args.style, sha256: result.sha256 });
       return result;
     },
     presentCall: args => ({ card: 'generic', title: `修改 Skill 默认样式：${args.style}`, kind: 'edit' }),
@@ -152,12 +173,22 @@ export function makeStyleTool(config) {
 
 export function apply(ctx, config) {
   ctx.tools.register(makeAnalysisTool(ctx, config));
-  ctx.tools.register(makeStyleTool(config));
-  ctx.tools.guard(exec => ['skill', 'sst_analyze', 'sst_set_style'].includes(exec.name)
-    ? undefined : '本演示仅允许 skill、sst_analyze 和 sst_set_style 三个受控工具。');
+  ctx.tools.register(makeStyleTool(config, ctx));
+  for (const tool of makeWorkflowTools(ctx, config)) ctx.tools.register(tool);
+  mountGallery(ctx, { projectRoot: config.projectRoot, baseURL: config.webURL });
+  const allowed = ['skill', 'sst_status', 'sst_prepare_data', 'sst_analyze', 'sst_set_style',
+    'sst_compare_results', 'sst_create_skill', 'sst_install_skill', 'sst_export_skill', 'sst_show_figure'];
+  ctx.tools.guard(exec => allowed.includes(exec.name)
+    ? undefined : '本演示只允许已注册的海温工作流工具，不开放任意shell。');
   ctx.on('tools/result', (exec, result) => {
-    if (!['skill', 'sst_analyze', 'sst_set_style'].includes(exec.name)) return;
-    const row = { event: 'tool-result', tool: exec.name, isError: result.isError };
+    if (!allowed.includes(exec.name)) return;
+    const row = { event: 'tool-result', tool: exec.name, callId: exec.callId ?? null,
+      sessionId: exec.agent?.session?.id ?? null, isError: result.isError };
+    if (!result.isError && result.value && typeof result.value === 'object') {
+      if (typeof result.value.ok === 'boolean') row.businessOK = result.value.ok;
+      if (typeof result.value.ready === 'boolean') row.ready = result.value.ready;
+      if (exec.name === 'sst_show_figure' && typeof result.value.run === 'string') row.run = result.value.run;
+    }
     if (exec.name === 'skill' && !result.isError && result.value && typeof result.value === 'object') {
       row.skillName = typeof result.value.name === 'string' ? result.value.name : null;
       row.bodySha256 = typeof result.value.content === 'string' ? createHash('sha256').update(result.value.content).digest('hex') : null;

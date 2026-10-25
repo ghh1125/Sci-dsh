@@ -1,34 +1,38 @@
-# Sci-dsh：用 DeepSeek Harness 做海温分析
+# Sci-dsh：在 DeepSeek Harness 里完成海温分析与 Skill 复用
 
-这个项目用于南海所科学智能论坛的现场演示：**给一份海温数据 → 调用工具计算和画图 → 修改 Skill → 换一份数据复用 → 检查错误输入。**
+面向南海所科学智能论坛的演示代码：**准备真实海温数据 → 分析出图 → 形成 Skill → 导入 → 修改并复用 → 检查错误输入。**
 
-运行平台只有 **DeepSeek Harness**。Harness 调度工作，Python 工具负责数值计算和绘图，Skill 保存方法和检查规则。
+所有科研业务都通过 **DeepSeek Harness（DSH）的对话和工具调用**完成。Python 是 Harness 调用的计算、绘图工具；Skill 保存方法、规则、脚本和成功运行记录。首次安装依赖、填写 API 配置在启动前完成。项目运行不需要 Codex。
 
-> **交付状态：源码准备版。** 按要求，最后阶段只编写代码，没有正式启动 Harness、调用模型 API、完成全部数据下载或生成示例图片。最终代码和新设备安装流程尚未做端到端运行验收。下面的命令由使用者准备好后主动执行；预期效果不代表已实测结果。仓库没有 API 密钥，也没有用虚构数据制作的预览图。
+> **当前是源码准备版。** 本轮只编写和静态检查代码，未启动最终流程、未调用模型 API、未下载演示数据、未生成图片或 PPT、未运行新增测试。以下均为之后由使用者主动执行的步骤与预期效果，不能视为已通过运行验收。仓库不含 API 密钥或伪造预览图。
 
-## 1. 需要准备什么
+## 1. 需求落实清单
 
-| 项目 | 要求 |
-| --- | --- |
-| 系统 | macOS、Linux；Windows 可按下面的 PowerShell 命令配置，尚未实机验证 |
-| Node.js | 22 或更新版本，带 npm |
-| Python | 3.10 或更新版本，能创建虚拟环境 |
-| Git | 用于下载项目和之后更新 |
-| 模型服务 | 支持 OpenAI 兼容 Chat Completions、流式输出和工具调用的服务 |
-| API 配置 | API base URL、准确模型 ID、你自己的 key |
-| 网络 | 首次安装依赖、下载 NOAA 数据及调用在线模型时需要 |
+| 原要求 | 已写入的功能 | 如何操作 |
+| --- | --- | --- |
+| 只能用 DeepSeek Harness | 官方 DSH 启动器、项目工具插件、网页对话 | `npm run web` |
+| 给出可用工具和真实数据集 | NOAA OISST 下载、质控、月均聚合；Python / Matplotlib 绘图 | 对话中准备数据 |
+| 分析海温、展示图片 | 同月气候态、月距平、PNG / SVG / PDF、Harness 内部图库 | 对话中分析并展示 |
+| 把成功流程变成 Skill | 方法模板＋经校验的成功记录，生成草稿 | 对话中创建 Skill |
+| 导出、导入、修改、复用 | ZIP 导出、安装、重新加载、默认样式修改、B 格点复用 | 对话中逐步操作 |
+| 验证修改没有改错数值 | 样式比较、基准期切换比较 | 对话中比较两次结果 |
+| 演示智能体发现问题 | 故意缺少 2000-02 的教学副本，拒绝出图 | 对话中分析缺月案例 |
+| 换电脑可使用 | 依赖锁文件、配置模板、完整步骤 | 克隆本仓库后配置 |
+| 现在不要跑 | 只交付源码和说明，无自动运行 CI | 后续自行运行验收 |
 
-依赖版本固定在 `package-lock.json`：DSH CLI 为 `0.1.0-rc.6`，工具包为 `0.1.0-rc.7`。这是根据本机已有官方包接口编写的组合，不自动跟随最新版升级。Python 依赖见 `requirements.txt`。
+这些是**实现覆盖情况**；实际能否完整运行，还需要在允许运行时验证 DSH、代理服务和 NOAA 网络访问。
 
-## 2. 换设备后安装
+## 2. 安装 DSH 和依赖
 
-以下命令在你准备运行时执行。克隆到任意位置即可，不依赖原电脑的绝对路径。
+准备 Git、Node.js 22 或更新版本、Python 3.10 或更新版本，以及支持 **OpenAI 兼容 Chat Completions、流式输出、工具调用**的模型服务。
 
 ```bash
 git clone https://github.com/ghh1125/Sci-dsh.git
 cd Sci-dsh
 npm ci
 ```
+
+`npm ci` 会安装项目固定版本的官方 DeepSeek Harness，无需另外全局安装 `dsh`。当前固定 DSH CLI `0.1.0-rc.6` 与工具包 `0.1.0-rc.7`；不要在演示前随意升级。接口按本机已有官方包源码编写，最终组合仍待运行验收。
 
 macOS / Linux：
 
@@ -46,225 +50,239 @@ py -3 -m venv .venv
 Copy-Item .env.example .env
 ```
 
-项目会优先使用自己的 `.venv`，不要求每次手动激活它。也可以在 `.env` 中用 `SCI_DSH_PYTHON` 指定其他已装好依赖的 Python。
+Python 工具依赖见 `requirements.txt`：Matplotlib 绘图，NumPy 支持数值环境，certifi 提供 HTTPS 证书。项目自动使用自己的 `.venv`，不必每次手动激活。Windows 路径已作处理，但尚未实机验证。
 
 ## 3. 配置 API
 
-用编辑器打开本地 `.env`，填写三项：
+用编辑器打开本地 `.env`：
 
 ```dotenv
 SCI_DSH_BASE_URL=https://token.fncompute.com/v1
-SCI_DSH_MODEL=这里填写服务商提供的准确模型ID
-SCI_DSH_API_KEY=这里仅在本地填写你的密钥
+SCI_DSH_MODEL=服务商提供的准确模型ID
+SCI_DSH_API_KEY=仅在本机填写你的密钥
 ```
 
-- 目前已知的服务入口是 `https://token.fncompute.com`。上面的 **`/v1` 只是待确认示例**，没有发送请求验证；请以该服务控制台或文档给出的 OpenAI 兼容 API base URL 为准。
-- 模型 ID 从服务控制台复制，本项目不猜测默认模型；模型需要支持工具调用。
-- `.env` 自动读取且被 Git 忽略。换设备后重新填写，不需要把密钥上传 GitHub，也不依赖旧电脑的 `~/.dsh` 配置。
-- 这里采用 DSH 的 OpenAI 兼容适配层，仍由 DeepSeek Harness 运行。该代理的流式输出与工具调用兼容性尚未验证。
+- 已知服务域名为 `https://token.fncompute.com`；**示例中的 /v1 路径尚未确认**，以服务控制台或文档为准。
+- 模型 ID 必须从控制台复制，不猜测名称。模型和代理都需要支持工具调用。
+- 本项目没有验证该代理、模型或 key 的可用性，也没有发送试探请求。
+- `.env` 被 Git 忽略；不要把 key 写入 Skill、提示词或 GitHub。新设备重新填写即可。
+- 如需使用其他 Python，在 `.env` 加 `SCI_DSH_PYTHON=/你的/python/完整路径`。
 
-之后可执行本地检查：
+之后可以主动执行：
 
 ```bash
 npm run harness:check
 ```
 
-它检查依赖、Skill 文件和配置是否存在，不请求模型、不检验 key 是否有效，也不验证代理连通性。
+它检查本地依赖和配置，**不调用模型 API，也不能证明 API 连通**。首次显示 `skillInstalled: false` 是正常状态：专用 Skill 要在首次成功分析后创建。
 
-## 4. 准备真实海温数据
-
-```bash
-npm run data:prepare
-```
-
-这一步只访问 NOAA 公共数据，不使用模型 API。它按年下载两个格点的日值，检查日期与单位，再生成月均 CSV：
-
-| 数据 | 格点 | 时间与作用 |
-| --- | --- | --- |
-| A | 18.125°N，114.125°E | 1982–2025，首次分析 |
-| B | 15.125°N，114.125°E | 同样时间范围，新任务复用 |
-| B 缺月教学副本 | 与 B 相同 | 故意删去 `2000-02`，用于演示拒绝错误输入 |
-
-完整数据每个格点有 528 个月。它们是 NOAA OISST 格点分析产品，**不是观测站，也不是整个南海的平均值**。正式演讲前还应核对格点位置和数据适用性。
-
-预期生成：
-
-```text
-data/
-  point_A_monthly.csv
-  point_A.metadata.json
-  point_B_monthly.csv
-  point_B.metadata.json
-  point_B_gap_demo.csv
-  point_B_gap_demo.metadata.json
-  data_validation.json
-  raw/                       原始响应与来源记录
-```
-
-下载中断后，重新运行同一命令可使用已完成的缓存。网络慢时可降低并发、增加单次超时：
-
-```bash
-npm run data:prepare -- --workers 2 --timeout 90
-```
-
-历史镜像可能缺文件。脚本只对 2016 年以前、NOAA 明确说明 v2 与 v2.1 SST 相同的区间，使用有出处的历史 v2 记录补充镜像缺项，并检查可用重叠值和记录使用日期。这不是插值；2016 年以后不采用旧版补充。可用 `--no-historical-repair` 关闭该补充路径。未解决的缺项会报错，不会制造海温值。
-
-原始缓存、下载后的数据、运行结果均不提交 Git。有关字段和来源见 [数据说明](data/README.md)。
-
-## 5. 用 Harness 完成演示
-
-先完成依赖配置和数据准备。下面每条命令都会真正调用你配置的模型服务，可能产生服务费用。
-
-### 第一步：分析 A，生成图
-
-```bash
-npm run demo -- --case A --style default --output demo-A-v1
-```
-
-预期过程：加载 `ocean-sst-analysis` → 调用 `sst_analyze` → 检查数据 → 计算 → 生成图表与说明。
-
-到 `outputs/demo-A-v1/` 打开 `sst_analysis.png` 查看图片，也有 SVG 和 PDF。图包含：
-
-- 上面：2025 年每月海温与基准期同月平均的对照。
-- 下面：1982–2025 年每个月相对同月基准的海温异常。
-
-当前工具返回本地图片路径；可用文件管理器或图片查看器打开，不承诺网页端会自动嵌入图片。
-
-### 第二步：修改 Skill，再画一次
-
-```bash
-npm run demo -- --set-style presentation --case A --output demo-A-v2
-```
-
-这会要求模型调用 `sst_set_style`，实际修改 `SKILL.md` 中的默认样式，再重新加载 Skill、运行分析。`presentation` 使用更大的字体、正负异常分色；数据和计算公式不变。
-
-注意：`--style` 只指定本次样式；`--set-style` 修改保存下来的 Skill 默认值，两者不能同时使用。
-
-要实际核对两次数值表是否相同：
-
-```bash
-npm run results:compare -- outputs/demo-A-v1 outputs/demo-A-v2
-```
-
-这一步是本地文件比较，不请求模型。只有比较实际通过后，才可说“已验证修改样式没有改变数值”。
-
-### 第三步：新任务换成 B
-
-```bash
-npm run demo -- --case B --output demo-B-v1
-```
-
-每次 headless 命令会新建任务。这里省略 `--style`，使用上一步保存的 Skill 默认样式；工具会为 B 重新计算气候态，不沿用 A 的结果。
-
-### 第四步：故意给缺月数据
-
-```bash
-npm run demo -- --case missing-month --output demo-gap-v1
-```
-
-应准确报告缺少 `2000-02`、二月基准样本不足 30 个，并停止分析。**此步骤预期不生成科学图片。** Python 分析工具以退出码 2 表示数据不合格；Harness 外层若成功验证了这个预期错误，可以将异常教学流程视为完成。
-
-每次 `--output` 都需要一个新目录名；已有非空目录会被拒绝，避免旧图冒充本次结果。重复演示时将 `v1` 改成 `v2` 或其他新名称即可。
-
-## 6. 用网页对话演示
+## 4. 打开 Harness
 
 ```bash
 npm run web -- --port 3080
 ```
 
-打开终端显示的本地地址，输入：
+在浏览器打开终端显示的 `http://127.0.0.1:3080`。之后在这个对话窗口输入下面的指令，无需另开终端执行科研脚本。网页仅监听本机；按 Ctrl-C 停止。
 
-> 加载 ocean-sst-analysis，分析 A 数据，以 1991–2020 为基准，输出到 web-A-01。展示结果路径，解释一个月份的距平计算；检查失败就停止。
+**数据准备最好在演讲前完成一次。** 首次需要联网下载；现场从状态检查开始，复用已验证的数据缓存。后续模型对话会调用配置的 API。
 
-然后可以继续：
+## 5. 现场一步一步怎么做
 
-> 把 Skill 默认样式改成 presentation，重新加载 Skill，再分析 A，输出到 web-A-02。不要改变算法。
+以下输出名适合第一次演示。重新演示请换新名字，例如把 `demo-A-v1` 改为 `demo-A-v3`。非空结果目录、已有草稿和已有 ZIP 默认不覆盖。
 
-新建会话后输入：
+### ① 准备数据
 
-> 使用 ocean-sst-analysis 分析 B，采用 Skill 默认样式，输出到 web-B-01。
+在 Harness 输入：
 
-> 下面是故意缺月的教学数据。用同一个 Skill 分析 missing-month，输出到 web-gap-01；指出检查到的问题，不补值、不换数据。
+> 查看当前准备状态。如果海温数据还没有准备好，请下载并准备两个格点的数据和缺月教学副本，使用 2 个并发、单次请求超时 90 秒。完成后展示来源、覆盖期和完整性报告；失败就报告原因，不进入分析。
 
-网页仅监听本机 `127.0.0.1`。按 Ctrl-C 结束。更完整提示见 [演示提示](skills/ocean-sst-analysis/references/demo-prompts.md)。
+预期调用：`sst_status → sst_prepare_data`。展示两个格点各 **528 个月**的完整性结果。已有文件不代表已通过完整性校验，首次分析仍会严格复查。
 
-## 7. 生成哪些文件，怎么验收
+| 数据 | 格点 | 覆盖期和用途 |
+| --- | --- | --- |
+| A | 18.125°N，114.125°E | 1982–2025，首次分析 |
+| B | 15.125°N，114.125°E | 1982–2025，换输入复用 |
+| missing-month | 与 B 相同 | 人为删除 2000-02，用于教学 |
 
-| 输出 | 用途 |
+来源是 [NOAA OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) 格点分析产品。它们不是观测站，也不是南海区域平均。脚本下载日值，只有自然月全部日期有效才计算完整月均值。
+
+下载中断可在 Harness 中要求“继续准备数据，复用缓存”。历史镜像缺项仅在 2016 年以前、官方说明 v2 与 v2.1 SST 相同的区间，核对重叠值后使用有出处的 v2 数据补充，并记录具体来源。2016 年以后不采用旧版补充；未解决的缺值会报错。详见 [数据说明](data/README.md)。
+
+### ② 先用工具完成一次分析、看到图
+
+> 分析 A，基准期 1991–2020，本次使用 default 样式，输出到 demo-A-v1。若已有 ocean-sst-analysis 就先加载；如果还没有，就使用基础分析工具。成功后展示图片，给出来源和一个月份的距平计算；失败就停止。
+
+预期调用：`sst_analyze → sst_show_figure`。点击返回的 Harness 内部图库链接，可看到：
+
+- 上图：2025 年各月海温与基准期同月平均的对照。
+- 下图：1982–2025 年月海温异常。
+- 同页的坐标、基准期、中文结果说明，以及 PNG / SVG / PDF / CSV 下载链接。
+
+这里应展示**本次实际生成的图片**。现在仓库没有预制图片；仅有代码，不提前声称已经出图。图库由 DSH 的 Web 服务提供，无需单独启动图片服务器。
+
+### ③ 把成功流程生成 Skill
+
+> 从 demo-A-v1 的成功分析创建 ocean-sst-analysis Skill 草稿，展示生成位置和保存的运行证据。不要把失败记录或尚未运行的分析作为依据。
+
+调用 `sst_create_skill`，生成 `drafts/ocean-sst-analysis/`。创建工具会核对输入 CSV、metadata、分析脚本的 SHA-256，以及产物完整性和科学检查项。
+
+**这里的“生成”是把预先编写的方法模板与真实成功记录组合成可复用包**，包含规则、脚本、方法说明和示例运行记录。它不表示模型从零发现了统计方法，也不训练模型。
+
+### ④ 导出，再导入到 Harness
+
+先输入：
+
+> 将刚创建的 Skill 草稿导出，source 使用 draft，包名 ocean-sst-analysis。
+
+调用 `sst_export_skill`，生成 `dist/ocean-sst-analysis.zip`。再输入：
+
+> 从包名 ocean-sst-analysis 的 ZIP 导入 Skill。确认 Harness 已发现它，再加载 ocean-sst-analysis。
+
+预期调用：`sst_install_skill → skill`。安装后目录为 `skills/ocean-sst-analysis/`；只有真实加载成功，才能说“已加载”。若文件已安装但当前会话未发现新版本，按工具提示新建/刷新会话后再加载。
+
+### ⑤ 修改 Skill 的默认样式，比较数值
+
+> 把 ocean-sst-analysis 的默认样式改为 presentation，重新加载最新 Skill。仍用 A 和 1991–2020 基准期，输出到 demo-A-v2；这次省略 style，让工具读取修改后的默认值。展示图片，再将 demo-A-v1 与 demo-A-v2 按 style 模式比较。
+
+预期调用：`sst_set_style → skill → sst_analyze → sst_show_figure → sst_compare_results`。
+
+展示默认样式真实修改、字体和配色变化，以及**两份数值表是否逐字节一致**的比较结果。只有比较成功，才能说“样式改变没有改变数值”。
+
+### ⑥ 新建会话，换一个格点复用
+
+在 Harness 网页新建会话，然后输入：
+
+> 加载 ocean-sst-analysis，分析 B，基准期 1991–2020，输出到 demo-B-v1，使用 Skill 的默认样式，成功后展示图片。
+
+展示新会话直接加载 Skill、继承保存的默认样式、为 B 重新计算气候态和距平。无需重新粘贴整套方法。
+
+### ⑦ 给错误数据，看它停止
+
+> 这是人为删月的教学测试。加载同一个 Skill，分析 missing-month，基准期 1991–2020，输出到 demo-gap-v1。必须实际校验；失败后指出具体问题，不补值、不缩短基准期、不切换数据，不展示旧图。
+
+应准确报告缺少 **2000-02**，二月基准样本不足，停止计算且不生成科学图片。分析工具退出码 2 表示输入未通过；这一步的教学成功指“实际检出指定错误”，不是得到一张图。
+
+### ⑧ 可选加演：修改基准期
+
+> 加载 Skill，分析 A，基准期改为 1982–2011，仍用 presentation，输出到 demo-A-baseline。展示图片，再将 demo-A-v2 与 demo-A-baseline 按 baseline 模式比较。
+
+展示 SST 原值不变，气候态和距平随基准期改变。比较工具会核对同一输入、同一方法，按各自基准重算气候态，检查每月距平及两次差值关系。
+
+### ⑨ 带走修改后的 Skill
+
+> 导出已安装的 Skill，source 使用 installed，包名 ocean-sst-analysis-presentation。
+
+得到 `dist/ocean-sst-analysis-presentation.zip`。这次应导出 **installed**，而不是修改前的 draft。ZIP 不带 API key、原始数据、图片和电脑专属依赖。
+
+## 6. 换设备继续使用
+
+1. 克隆仓库，按第 2–3 节安装并配置。
+2. 若要沿用修改后的 Skill，把导出的 ZIP 复制到新项目的 `dist/`。
+3. 启动 Harness，输入：“从包名 ocean-sst-analysis-presentation 导入 Skill，确认可发现后加载。”
+4. 在 Harness 中准备数据，或事先复制旧设备的完整 `data/`（包含 CSV、metadata 和来源记录）；分析仍会验证文件配对与完整性。
+5. 开始分析。若已有同名 Skill，只有明确要求替换才使用 `replace: true`；旧版保存在 `backups/`。
+
+**最稳妥的迁移单位是整个仓库＋依赖＋配置，必要时再导入 ZIP。** 只复制 `SKILL.md` 不会自动安装 Python 或注册专用工具。这个示例的工具只接收 A、B、missing-month；分析自己的数据需按字段契约准备 CSV/metadata，并扩展案例映射。
+
+## 7. 工具、方法和输出
+
+| Harness 工具 | 作用 |
 | --- | --- |
-| `sst_analysis.png` | 直接展示图片 |
-| `sst_analysis.svg` / `.pdf` | 后续编辑或放进报告 |
-| `result.csv` | 每个月的 SST、同月气候态和异常值 |
-| `climatology.csv` | 12 个月的气候态及样本数 |
-| `report.json` | 成功/失败、输入与脚本校验值、参数、来源和数值抽查 |
-| `summary.md` | 中文结果说明、图注和解释范围 |
-| `outputs/harness-evidence/` | Harness 工具调用、日志及流程是否实际完成的记录 |
+| `sst_status` | 查看本地准备状态，不替代科学校验 |
+| `sst_prepare_data` | 下载、聚合、保存来源与完整性报告 |
+| `sst_analyze` | 校验输入、计算气候态和距平、绘图 |
+| `sst_show_figure` | 返回内部图库和真实产物链接 |
+| `sst_compare_results` | 样式或基准期变化的数值验收 |
+| `sst_create_skill` | 从成功运行和模板生成草稿 |
+| `sst_export_skill` | 导出草稿或已安装版本 |
+| `sst_install_skill` | 从 ZIP 或草稿安装、发现 Skill |
+| `skill` | DSH 官方 Skill 加载工具 |
+| `sst_set_style` | 修改已安装 Skill 的默认样式 |
 
-验收应看工具实际调用和 `report.json`，不能仅凭助手说“已完成”。同月气候态是基准期 30 个相同月份月均值的平均；月异常 = 当月海温 − 对应月份气候态。脚本要求月份无重复、日覆盖完整、基准期完整、单位明确。
+科学公式：同月气候态＝基准期内 30 个对应月份月均 SST 的算术平均；月距平＝当月 SST－同月气候态。检查月份唯一连续、自然月日覆盖完整、单位、坐标、文件 SHA 和完整 30 年基准。不能用所有月份的总平均代替同月气候态。
 
-本示例不计算趋势显著性，不判断海洋热浪，不作因果归因。原始数据和科学解释仍需研究者核对。
+每次成功分析生成：
 
-## 8. 把 Skill 带走复用
+| 文件 | 用途 |
+| --- | --- |
+| `sst_analysis.png / .svg / .pdf` | 展示图片、后续编辑或放入报告 |
+| `result.csv` | 每月 SST、气候态和距平 |
+| `climatology.csv` | 12 个历月的气候态、样本数 |
+| `report.json` | 状态、来源、参数、校验值、数值抽查 |
+| `summary.md` | 中文结果说明、图注、解释范围 |
 
-Skill 已保存在 `skills/ocean-sst-analysis/`，包含规则、分析脚本和方法说明。导出：
+只描述这个格点和这段时间。本示例不判定海洋热浪、不计算趋势显著性、不作因果归因；中文图注是计算结果的辅助表达，研究者仍需核对。
+
+## 8. 不用网页时，也由 DSH 执行
+
+以下命令仍启动 DeepSeek Harness，由模型调用同一组工具，不是直接绕过 Harness 跑分析：
 
 ```bash
-npm run skill:export
+npm run dsh -- --prompt "准备海温数据，成功后报告完整性"
+npm run demo -- --case A --style default --output cmd-A-v1
+npm run dsh -- --prompt "从 cmd-A-v1 创建 Skill 草稿，再导出草稿为 ocean-sst-analysis"
+npm run dsh -- --prompt "导入包名 ocean-sst-analysis，确认可发现后加载"
+npm run demo -- --set-style presentation --case A --output cmd-A-v2
+npm run dsh -- --prompt "按 style 模式比较 cmd-A-v1 和 cmd-A-v2"
+npm run demo -- --case B --output cmd-B-v1
+npm run demo -- --case missing-month --output cmd-gap-v1
+npm run demo -- --case A --baseline 1982 2011 --output cmd-A-baseline
 ```
 
-得到 `dist/ocean-sst-analysis.zip`。它不包含 key、真实数据或运行结果。再次导出时指定新文件名，例如：
+每条命令创建独立任务；需要已安装 Skill 的分析会先加载。`--style` 只影响本次，`--set-style` 修改保存的默认值，两者不能同时用。通用 `--prompt` 的任务、样式和输出请完整写在提示词里。
 
-```bash
-npm run skill:export -- --output dist/ocean-sst-analysis-v2.zip
-```
+无网页模式时，`sst_show_figure` 返回本地路径；要在 Harness 图库查看，可启动 Web 后再要求展示该输出目录。默认任务超时 1800 秒，可用 `--timeout` 调整，范围 1–3600 秒。
 
-**换设备最简单的方式是克隆整个仓库**，重新安装依赖、填写本地 `.env`、准备数据，之后按第 5 节运行。如果想沿用现场修改过的 Skill，可将导出的包解压到新项目的 `skills/`，检查并保留原版本后替换。
+## 9. 验收与排错
 
-在其他 Harness 项目里仅复制 `SKILL.md` 不会自动注册计算工具。还需要本项目的工具插件、Harness 配置和相应依赖；当前专用工具只支持 A、B、missing-month 三个案例。支持你自己的新数据时，需按字段契约准备 CSV/metadata，并调整 `harness/ocean-tools.mjs` 的案例映射。
+证据位于 `outputs/harness-evidence/<启动时间>/`：`run.json`、`tool-events.jsonl`、日志、结束时的 `verification.json`。验收必须看实际工具调用和结果，不能仅凭模型说“已完成”。网页模式的会话日志在退出后汇总；中途可看工具卡和结果报告。
 
-## 9. 本地检查与备用出图
+预设命令会检查要求的案例、输出、基准、样式、Skill 加载顺序和真实产物展示；修改或导入后不能用旧正文的加载记录冒充新版本。通用自然语言任务只校验实际发生的工具执行，不保证理解了任意提示词的全部意图，讲者仍应对照步骤确认。
 
-这些命令供之后自行验收，不调用模型 API：
+之后允许测试时，可执行下列**维护检查**（不请求模型 API，不作为现场业务入口）：
 
 ```bash
 npm run test:analysis
 npm run test:harness
-npm run plot:A
-npm run plot:B
-npm run plot:gap
 ```
 
-`plot:*` 直接运行同一 Python 工具，可用于区分“计算问题”和“模型/代理问题”，不等于已经完成 Harness 演示。`plot:gap` 返回错误是预期行为。测试中的人工数值只用于验证公式，不作为科学样例数据。
+测试使用人工数值校验公式和失败行为，不把测试数据当作真实演示数据。仓库保留本地维护脚本供开发排错；主演示所有业务由 Harness 调用。
 
-## 10. 常见问题
-
-| 现象 | 处理方式 |
+| 现象 | 处理 |
 | --- | --- |
-| 提示缺模型名或 key | 填写项目根目录 `.env`，不是编辑 Skill |
-| 401 / 403 | 在服务控制台核对 key、额度或模型权限；不要把 key 贴到公开 issue |
-| 404 或模型不存在 | 核对完整 base URL（包括是否需要 `/v1`）和准确模型 ID |
-| 返回普通聊天但不调用工具 | 确认模型和代理支持 tool calls；检查 `harness-evidence`，不要把文本回答算成功 |
-| 缺 CSV | 先完成 `npm run data:prepare`，且确认它成功退出 |
-| NOAA 超时或镜像缺项 | 重跑以续用缓存，降低 workers 或增大 timeout；保留失败报告，不自行补数值 |
-| Python 依赖缺失 | 使用 `.venv` 安装 `requirements.txt`，或设置 `SCI_DSH_PYTHON` |
-| 输出目录非空 | 换一个新的 `--output` 名称 |
-| 默认样式没有变化 | 区分 `--style` 和 `--set-style`，检查 Skill 默认行并重新加载 |
+| 找不到 DSH | 在项目根目录执行 `npm ci` |
+| Python 依赖缺失 | 用项目 `.venv` 安装 `requirements.txt` |
+| 缺模型名或 key | 填写本地 `.env`，不修改 Skill |
+| 401 / 403 | 在服务控制台核对 key、额度、模型权限 |
+| 404 或模型不存在 | 核对完整 API 入口和准确模型 ID |
+| 模型只聊天，不调用工具 | 核对代理与模型的工具调用支持；文字回答不算执行 |
+| NOAA 下载慢或中断 | 在 Harness 中请求继续准备，复用缓存、减少并发、延长单次超时 |
+| 输出目录非空 | 换新输出名，不重用旧图 |
+| 草稿或 ZIP 已存在 | 继续使用已创建草稿；导出换新包名，默认不覆盖 |
+| 已安装但未发现新 Skill | 按返回提示新建/刷新 Harness 会话再加载 |
+| 图库链接打不开 | 保持 Web 在运行，使用本次返回的 `127.0.0.1` 地址和端口 |
+| 参数比较失败 | 看具体差异，不把失败报告包装成“数值相同” |
 
-## 11. 代码位置
+## 10. 代码位置
 
 ```text
-scripts/fetch_noaa_oisst.py                   下载、聚合、来源记录、缺月教学样例
-scripts/run-harness.mjs                      启动真正的 DeepSeek Harness
-scripts/local-step.mjs                       本地操作入口
-scripts/compare_results.py                  样式修改前后的数值比较
-scripts/export_skill.py                     导出 Skill
-harness/sci.patch.yml                       模型、Skill 和工具配置
-harness/sci.web.patch.yml                   网页模式配置
-harness/ocean-tools.mjs                     sst_analyze / sst_set_style 工具
-skills/ocean-sst-analysis/SKILL.md           可复用操作规则
-skills/ocean-sst-analysis/scripts/analyze_sst.py
-                                            数据质控、计算、绘图
-tests/                                     供之后主动运行的检查
+harness/sci.patch.yml                   模型、技能发现、科研工具配置
+harness/sci.web.patch.yml               DSH 网页配置
+harness/ocean-tools.mjs                 分析与样式工具
+harness/workflow-tools.mjs              数据、比较、Skill 生命周期、展示工具
+harness/gallery.mjs                     DSH 内部图库
+harness/verify-workflow.mjs             执行证据验收
+scripts/run-harness.mjs                 统一 DSH 启动入口
+scripts/fetch_noaa_oisst.py              NOAA 下载、月聚合、来源记录
+scripts/compare_results.py              两次分析的数值比较
+scripts/skill_lifecycle.py              创建、导出、安装 Skill
+skill-templates/ocean-sst-analysis/      初始方法模板，不是已安装 Skill
+skills/                                运行后安装的 Skill
+drafts/                                运行后生成的草稿
+dist/                                  运行后导出的 ZIP
+data/                                  数据与来源文件
+outputs/                               图片、表格、报告与执行证据
+tests/                                 后续主动运行的验收检查
 ```
 
-源码中没有自动定时任务，也没有提交后自动运行的 CI。数据下载、API 调用、图片生成和测试都由使用者明确执行相应命令触发。
+更详细的现场提示见 [演示提示](skill-templates/ocean-sst-analysis/references/demo-prompts.md)，方法与修改规则见 [Skill 模板](skill-templates/ocean-sst-analysis/SKILL.md)。运行目录、密钥和数据缓存均不提交 Git；没有提交后自动调用 API 或生成图片的任务。

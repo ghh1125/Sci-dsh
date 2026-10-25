@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
-    "sst_analysis", ROOT / "skills/ocean-sst-analysis/scripts/analyze_sst.py")
+    "sst_analysis", ROOT / "skill-templates/ocean-sst-analysis/scripts/analyze_sst.py")
 sst = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sst)
 

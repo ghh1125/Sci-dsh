@@ -7,14 +7,16 @@
   "engines": { "node": ">=22" },
   "scripts": {
     "demo": "node scripts/run-harness.mjs",
+    "dsh": "node scripts/run-harness.mjs",
     "web": "node scripts/run-harness.mjs --web",
     "harness:check": "node scripts/run-harness.mjs --check",
-    "test:harness": "node --test tests/harness-adapter.test.mjs",
+    "test:harness": "node --test tests/harness-adapter.test.mjs tests/gallery.test.mjs tests/workflow-order.test.mjs",
     "data:prepare": "node scripts/local-step.mjs data",
     "plot:A": "node scripts/local-step.mjs plot-A",
     "plot:B": "node scripts/local-step.mjs plot-B",
     "plot:gap": "node scripts/local-step.mjs plot-gap",
     "skill:export": "node scripts/local-step.mjs export",
+    "skill:manage": "node scripts/local-step.mjs skill",
     "results:compare": "node scripts/local-step.mjs compare",
     "test:analysis": "node scripts/local-step.mjs test"
   },

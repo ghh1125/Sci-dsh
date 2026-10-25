@@ -12,4 +12,8 @@ data/*.csv
 data/*.json
 outputs/
 dist/
+drafts/
+backups/
+skills/*
+!skills/README.md
 outputs/**/.mpl-cache/

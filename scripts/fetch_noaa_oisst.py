@@ -113,7 +113,7 @@ def obtain_year(year: int, raw: Path, timeout: int, refresh: bool,
     provenance = target.with_suffix(".source.json")
     if target.exists() and provenance.exists() and not refresh:
         body = target.read_bytes()
-        info = json.loads(provenance.read_text())
+        info = json.loads(provenance.read_text(encoding="utf-8"))
         if info.get("sha256") != sha256(target):
             raise ValueError(f"Cached source checksum mismatch: {target}")
         return year, parse_response(body, year), info
@@ -130,7 +130,7 @@ def obtain_year(year: int, raw: Path, timeout: int, refresh: bool,
                         "dataset_id": dataset, "file": target.name,
                         "sha256": sha256(target), "records": len(parsed),
                         "response_filtered_to_requested_year": True}
-                provenance.write_text(json.dumps(info, indent=2) + "\n")
+                provenance.write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
                 return year, parsed, info
             except DownloadCancelled:
                 raise
@@ -264,7 +264,7 @@ def build_point(point_id, combined, sources, data):
         "citation": "Huang et al. (2021), Improvements of the Daily Optimum Interpolation Sea Surface Temperature (DOISST) Version 2.1, Journal of Climate 34, 2923–2939, https://doi.org/10.1175/JCLI-D-20-0166.1",
         "source_files": sources,
     }
-    (data / f"point_{point_id}.metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
+    (data / f"point_{point_id}.metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return {"point_id": point_id, "complete": meta["complete"],
             "present_days": len(values), "expected_days": len(dates),
             "missing_dates": missing, "invalid_dates": invalid,
@@ -280,7 +280,7 @@ def create_gap_fixture(data: Path, missing_month: str = "2000-02"):
     """
     check_cancelled()
     original = data / "point_B_monthly.csv"
-    metadata = json.loads((data / "point_B.metadata.json").read_text())
+    metadata = json.loads((data / "point_B.metadata.json").read_text(encoding="utf-8"))
     if not metadata.get("complete") or metadata.get("monthly_count") != 528:
         raise ValueError("Gap fixture requires a complete, verified point B source")
     if metadata["sha256"] != sha256(original):
@@ -311,7 +311,7 @@ def create_gap_fixture(data: Path, missing_month: str = "2000-02"):
         }
     })
     (data / "point_B_gap_demo.metadata.json").write_text(
-        json.dumps(fixture_meta, ensure_ascii=False, indent=2) + "\n")
+        json.dumps(fixture_meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return {"fixture": target.name, "rows": len(kept), "removed_month": missing_month}
 
 
@@ -359,11 +359,11 @@ def main():
         # retry or file write. Never leave a background downloader after Ctrl-C.
         pool.shutdown(wait=True, cancel_futures=True)
     if failures:
-        (data / "download_failures.json").write_text(json.dumps(failures, indent=2) + "\n")
+        (data / "download_failures.json").write_text(json.dumps(failures, indent=2) + "\n", encoding="utf-8")
         raise SystemExit("Some source requests failed; cached successes are retained. Re-run to resume.")
     sources.sort(key=lambda s: s["file"])
     report = [build_point(p, combined, sources, data) for p in POINTS]
-    (data / "data_validation.json").write_text(json.dumps(report, indent=2) + "\n")
+    (data / "data_validation.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     for point in report:
         print(json.dumps({k: v for k, v in point.items() if not isinstance(v, list)}), flush=True)
     if not all(p["complete"] for p in report):

@@ -2,7 +2,7 @@
 
 本仓库不随附不完整的下载缓存、虚构海温数据或预制分析结果。
 
-在项目根目录执行 `npm run data:prepare`，从 NOAA 获取两个格点的真实日值，并生成：
+启动 `npm run web`，在 DeepSeek Harness 对话中要求“准备海温数据”；由 `sst_prepare_data` 工具从 NOAA 获取两个格点的真实日值，并生成：
 
 - `point_A_monthly.csv`、`point_A.metadata.json`
 - `point_B_monthly.csv`、`point_B.metadata.json`

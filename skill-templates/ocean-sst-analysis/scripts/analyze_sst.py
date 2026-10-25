@@ -257,6 +257,7 @@ def analyze(input_path, metadata_path, baseline, output, style="presentation"):
             "status": "ok", "run_id": run_id, "started_at": started_at,
             "method_version": METHOD_VERSION, "style": style,
             "input_file": str(Path(input_path).resolve()), "input_sha256": digest,
+            "metadata_file": str(Path(metadata_path).resolve()),
             "metadata_sha256": sha256(metadata_path), "script_sha256": sha256(__file__),
             "point": {"lat": metadata["lat"], "lon": metadata["lon"]},
             "coverage": [results[0]["month"], results[-1]["month"]],
