@@ -1,0 +1,15 @@
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.runtime/
+.env
+.env.*
+!.env.example
+data/raw/
+data/*.csv
+data/*.json
+outputs/
+dist/
+outputs/**/.mpl-cache/

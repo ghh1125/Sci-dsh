@@ -1,0 +1,6 @@
+# The shipped web profile otherwise mounts its full coding-agent presets.
+# Use the project-global scientific tool composition instead.
+- id: agent-presets
+  disabled: true
+- id: ui-agent-preset
+  disabled: true

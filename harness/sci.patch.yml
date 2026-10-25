@@ -1,0 +1,90 @@
+# Project-local overlay for the pinned DeepSeek Harness distribution.
+# Credentials are provided only as environment variables. No user store is read.
+- id: settings
+  disabled: true
+- id: credentials
+  disabled: true
+- id: llm-deepseek
+  disabled: true
+- id: llm-pi-ai
+  config:
+    providers:
+      sci-proxy:
+        displayName: Scientific Demo Proxy
+        api: openai-completions
+        apiKeyEnv: SCI_DSH_API_KEY
+        baseURL: !!js process.env.SCI_DSH_BASE_URL
+        models:
+          - id: !!js process.env.SCI_DSH_MODEL
+            name: !!js process.env.SCI_DSH_MODEL
+            maxTokens: 4096
+- id: agent-default-model
+  config:
+    provider: sci-proxy
+    model: !!js process.env.SCI_DSH_MODEL
+- id: skill-filesystem
+  disabled: false
+  config:
+    providerName: ocean-demo-filesystem
+    includeDefaultRoots: false
+    customSkillDirs: !!js [process.env.SCI_DSH_PROJECT_ROOT + '/skills']
+    watch: true
+- id: tool-skill
+  disabled: false
+- id: tools
+  config:
+    mode: native
+- id: system-prompt
+  config:
+    persona: >-
+      你是运行在 DeepSeek Harness 中的海温科研助手。先调用 skill 工具加载
+      ocean-sst-analysis，然后只使用 sst_analyze 工具执行项目内固定的计算。
+      用户明确要求修改 Skill 默认样式时可以调用 sst_set_style，随后重新加载 Skill。
+      根据真实工具结果报告数据来源、方法、统计结果和文件路径；工具失败时明确指出失败，
+      不伪造结果、不补造缺失月份。禁止读取配置、凭据或环境变量。
+      工具仅包含受控科研功能；不要要求任意 shell 或安装依赖。
+- id: session-title-llm
+  disabled: true
+- id: agent-instructions
+  disabled: true
+- id: plan-mode
+  disabled: true
+- id: tool-bash
+  disabled: true
+- id: tool-pwsh
+  disabled: true
+- id: tool-jobs
+  disabled: true
+- id: tool-fs
+  disabled: true
+- id: tool-fs-search
+  disabled: true
+- id: tool-subagent-control
+  disabled: true
+- id: tool-subagent-list-agents
+  disabled: true
+- id: tool-subagent
+  disabled: true
+- id: tool-subagent-fork
+  disabled: true
+- id: tool-subagent-report
+  disabled: true
+- id: tool-workflow
+  disabled: true
+- id: tool-todo
+  disabled: true
+- id: tool-goal
+  disabled: true
+- id: tool-ralph
+  disabled: true
+- id: tool-str-replace-editor
+  disabled: true
+- id: tool-web
+  disabled: true
+- insert:
+    - id: sci-ocean-tools
+      name: !!js process.env.SCI_DSH_PLUGIN
+      config:
+        projectRoot: !!js process.env.SCI_DSH_PROJECT_ROOT
+        python: !!js process.env.SCI_DSH_PYTHON
+        evidencePath: !!js process.env.SCI_DSH_EVIDENCE_PATH
