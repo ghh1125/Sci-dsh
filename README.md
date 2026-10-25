@@ -4,7 +4,7 @@
 
 所有科研业务都通过 **DeepSeek Harness（DSH）的对话和工具调用**完成。Python 是 Harness 调用的计算、绘图工具；Skill 保存方法、规则、脚本和成功运行记录。首次安装依赖、填写 API 配置在启动前完成。项目运行不需要 Codex。
 
-> **当前是源码准备版。** 本轮只编写和静态检查代码，未启动最终流程、未调用模型 API、未下载演示数据、未生成图片或 PPT、未运行新增测试。以下均为之后由使用者主动执行的步骤与预期效果，不能视为已通过运行验收。仓库不含 API 密钥或伪造预览图。
+> **交付状态：本机安装与网页启动已验证，端到端科学演示仍被数据获取阻塞。** Windows 本机已启动 Harness、验证模型 API 与网页流程，并修复网页内测声明无法保存的问题；但 NOAA ERDDAP 数据下载未成功，A、B 和缺月教学 CSV 尚未生成，因此没有把缺失数据当作科学结果。详细记录见 [STATUS.md](STATUS.md)。仓库没有 API 密钥，也没有用虚构数据制作的预览图。
 
 ## 1. 需求落实清单
 
@@ -50,7 +50,7 @@ py -3 -m venv .venv
 Copy-Item .env.example .env
 ```
 
-Python 工具依赖见 `requirements.txt`：Matplotlib 绘图，NumPy 支持数值环境，certifi 提供 HTTPS 证书。项目自动使用自己的 `.venv`，不必每次手动激活。Windows 路径已作处理，但尚未实机验证。
+Python 工具依赖见 `requirements.txt`：Matplotlib 绘图，NumPy 支持数值环境，certifi 提供 HTTPS 证书。项目自动使用自己的 `.venv`，不必每次手动激活。Windows 路径已在本机验证。
 
 ## 3. 配置 API
 
@@ -62,9 +62,9 @@ SCI_DSH_MODEL=服务商提供的准确模型ID
 SCI_DSH_API_KEY=仅在本机填写你的密钥
 ```
 
-- 已知服务域名为 `https://token.fncompute.com`；**示例中的 /v1 路径尚未确认**，以服务控制台或文档为准。
+- 本机验证使用的服务入口是 `https://token.fncompute.com/v1`；该地址已通过模型列表、流式输出和工具调用请求验证。换设备时仍应以服务控制台或文档给出的 OpenAI 兼容 API base URL 为准。
 - 模型 ID 必须从控制台复制，不猜测名称。模型和代理都需要支持工具调用。
-- 本项目没有验证该代理、模型或 key 的可用性，也没有发送试探请求。
+- 当前本机已验证代理和模型的流式输出、工具调用可用；这不代表 NOAA 数据下载网络一定可用。
 - `.env` 被 Git 忽略；不要把 key 写入 Skill、提示词或 GitHub。新设备重新填写即可。
 - 如需使用其他 Python，在 `.env` 加 `SCI_DSH_PYTHON=/你的/python/完整路径`。
 

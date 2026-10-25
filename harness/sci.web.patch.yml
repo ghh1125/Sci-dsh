@@ -4,3 +4,9 @@
   disabled: true
 - id: ui-agent-preset
   disabled: true
+
+# The web client stores the internal-testing acknowledgement in the local
+# settings service. The shared project patch disables settings for headless
+# runs, so re-enable it for the browser profile.
+- id: settings
+  disabled: false

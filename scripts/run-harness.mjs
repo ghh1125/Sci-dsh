@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { projectRoot, findDshRuntime, resolvePython } from './runtime-paths.mjs';
 import { verifyWorkflow } from '../harness/verify-workflow.mjs';
@@ -63,7 +64,7 @@ try {
   const env = { ...process.env, DSH_HOME: path.join(projectRoot, '.runtime/dsh'),
     SCI_DSH_BASE_URL: baseURL, SCI_DSH_MODEL: model, SCI_DSH_API_KEY: apiKey,
     SCI_DSH_PROJECT_ROOT: projectRoot, SCI_DSH_PYTHON: python,
-    SCI_DSH_PLUGIN: path.join(projectRoot, 'harness/ocean-tools.mjs'),
+    SCI_DSH_PLUGIN: pathToFileURL(path.join(projectRoot, 'harness/ocean-tools.mjs')).href,
     SCI_DSH_TOOLS_MODULE: runtime.tools, SCI_DSH_EVIDENCE_PATH: path.join(evidence, 'tool-events.jsonl'),
     SCI_DSH_WEB_URL: opts.web ? `http://127.0.0.1:${opts.port}` : '', PYTHONUTF8: '1' };
   const style = opts.style === null ? '省略style，使用当前默认值' : `style=${opts.style}`;
@@ -80,7 +81,7 @@ try {
     : `DeepSeek Harness任务已启动；证据目录：${path.relative(projectRoot, evidence)}`);
   const stdout = fs.createWriteStream(path.join(evidence, 'stdout.txt'));
   const stderr = fs.createWriteStream(path.join(evidence, 'stderr.txt'));
-  const child = spawn(process.execPath, args, { cwd: projectRoot, env, stdio: ['inherit', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['--expose-internals', ...args], { cwd: projectRoot, env, stdio: ['inherit', 'pipe', 'pipe'] });
   // A provider's errors can quote its configuration. Redact a key even if split
   // across stream chunks by buffering complete lines before displaying/saving.
   function relay(stream, destination, screen) {

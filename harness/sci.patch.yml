@@ -27,13 +27,16 @@
   config:
     providerName: ocean-demo-filesystem
     includeDefaultRoots: false
-    customSkillDirs: !!js [process.env.SCI_DSH_PROJECT_ROOT + '/skills']
+    customSkillDirs:
+      - !!js process.env.SCI_DSH_PROJECT_ROOT + '/skills'
     watch: true
 - id: tool-skill
   disabled: false
 - id: tools
   config:
     mode: native
+- id: hmr
+  disabled: false
 - id: system-prompt
   config:
     persona: >-
@@ -88,7 +91,9 @@
   disabled: true
 - insert:
     - id: sci-ocean-tools
-      name: !!js process.env.SCI_DSH_PLUGIN
+      # The profile config lives under .runtime/dsh/profiles/web or headless;
+      # loader plugin names are imported literally, so keep this relative path.
+      name: ../../../../harness/ocean-tools.mjs
       config:
         projectRoot: !!js process.env.SCI_DSH_PROJECT_ROOT
         python: !!js process.env.SCI_DSH_PYTHON

@@ -75,7 +75,7 @@ class AnalysisTests(unittest.TestCase):
             sst.analyze(self.input, self.meta, (1991, 2020), output)
         self.assertIn("2000-02", str(error.exception))
         self.assertIn("29", str(error.exception))
-        report = json.loads((output / "report.json").read_text())
+        report = json.loads((output / "report.json").read_text(encoding="utf-8"))
         self.assertEqual(report["status"], "error")
         self.assertEqual(report["artifacts"], [])
         self.assertEqual([p.name for p in output.iterdir()], ["report.json"])
