@@ -56,7 +56,9 @@ export function makeWorkflowTools(ctx, config) {
           '--budget-seconds', '1200', '--data-dir', projectPath(root, 'data')];
         if (args.refresh === true) params.push('--refresh');
         if (args.offline === true) params.push('--offline');
-        const result = await runPython(ctx, config, exec, 'fetch_noaa_oisst.py', params, 'sst_prepare_data');
+        const source = String(process.env.SCI_DSH_DATA_SOURCE ?? '').trim().toLowerCase();
+        const downloader = source === 'psl-monthly' ? 'fetch_noaa_psl_monthly.py' : 'fetch_noaa_oisst.py';
+        const result = await runPython(ctx, config, exec, downloader, params, 'sst_prepare_data');
         const payload = result.result;
         const mode = ['local-cache', 'download', 'offline'].includes(payload?.mode) ? payload.mode
           : args.offline === true ? 'offline' : 'download';

@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 // Shared by all agents in this Harness process. A separate process has its own lock.
 const dataOperations = new Map();
-const DATA_ENV_NAMES = ['SCI_DSH_DATA_PROXY', 'SCI_DSH_DATA_CA_BUNDLE'];
+const DATA_ENV_NAMES = ['SCI_DSH_DATA_PROXY', 'SCI_DSH_DATA_CA_BUNDLE', 'SCI_DSH_DATA_SOURCE'];
 
 export function currentDataOperation(root) {
   return dataOperations.get(fs.realpathSync(root))?.kind ?? null;
@@ -26,7 +26,7 @@ export async function withDataOperation(root, kind, operation) {
 /** Only the downloader receives explicit data-network overrides, never model arguments. */
 export function pythonEnvironment(script, source = process.env) {
   const env = { PYTHONUNBUFFERED: '1', PYTHONUTF8: '1', MPLBACKEND: 'Agg' };
-  if (script === 'fetch_noaa_oisst.py') for (const name of DATA_ENV_NAMES) {
+  if (['fetch_noaa_oisst.py', 'fetch_noaa_psl_monthly.py'].includes(script)) for (const name of DATA_ENV_NAMES) {
     if (typeof source[name] === 'string' && source[name].trim()) env[name] = source[name];
   }
   return env;

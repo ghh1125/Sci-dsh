@@ -114,7 +114,10 @@ def frontmatter_name(body: bytes) -> str:
     block = re.match(r"\A---\r?\n(.*?)\r?\n---(?:\r?\n|\Z)", text, flags=re.S)
     if not block:
         raise LifecycleError("SKILL.md 缺少 YAML frontmatter")
-    names = re.findall(r"^name:\s*([^\r\n]+)$", block.group(1), flags=re.M)
+    # Accept both LF and CRLF template files.  The repository template is
+    # commonly checked out with Windows line endings, so `$` alone would be
+    # positioned after `\n` while the captured value still ends before `\r`.
+    names = re.findall(r"^name:\s*([^\r\n]+)\r?$", block.group(1), flags=re.M)
     if len(names) != 1:
         raise LifecycleError("SKILL.md 必须有唯一 name 字段")
     return skill_name(names[0].strip().strip("\"'"))

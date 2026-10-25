@@ -4,9 +4,9 @@
 
 所有科研业务都通过 **DeepSeek Harness（DSH）的对话和工具调用**完成。Python 是 Harness 调用的计算、绘图工具；Skill 保存方法、规则、脚本和成功运行记录。首次安装依赖、填写 API 配置在启动前完成。项目运行不需要 Codex。
 
-> **交付状态：本机安装与网页启动已验证，端到端科学演示仍被数据获取阻塞。** Windows 本机已启动 Harness、验证模型 API 与网页流程，并修复网页内测声明无法保存的问题；但 NOAA ERDDAP 数据下载未成功，A、B 和缺月教学 CSV 尚未生成，因此没有把缺失数据当作科学结果。详细记录见 [STATUS.md](STATUS.md)。仓库没有 API 密钥，也没有用虚构数据制作的预览图。
+> **交付状态：Windows 本机已完成 DSH 网页端到端验收。** NOAA ERDDAP 受本机网络黑名单/TLS 环境阻塞时，项目改用 NOAA PSL 官方 OISST v2 highres 已发布月平均场，按两个格点提取 528 个月真实数据，并在 metadata 中明确记录“未下载逐日文件、未做本地日值再平均”。网页流程已完成 A 出图、Skill 创建/导入、样式切换与数值比较、B 复用、缺少 `2000-02` 的错误检查和最终 Skill 导出。详细证据与错误记录见 [STATUS.md](STATUS.md)。仓库没有 API 密钥，也没有提交原始数据或运行输出。
 
-本次针对 Issue #1 补上下载容错、错误诊断、离线数据复用、数据准备前置检查和 Windows ZIP 原始路径校验。**这些修复尚未运行复测**，不把以前版本的通过数字当作本次通过结果。
+本次针对 Issue #1 补上下载容错、错误诊断、离线数据复用、官方 PSL 月平均回退、数据准备前置检查、Windows ZIP 原始路径校验，以及 Windows CRLF Skill frontmatter 校验。代码和网页流程均已实际复测；本机 `.env` 仍只保存在本机，不进入仓库。
 
 ## 1. 需求落实清单
 
@@ -20,7 +20,7 @@
 | 验证修改没有改错数值 | 样式比较、基准期切换比较 | 对话中比较两次结果 |
 | 演示智能体发现问题 | 故意缺少 2000-02 的教学副本，拒绝出图 | 对话中分析缺月案例 |
 | 换电脑可使用 | 依赖锁文件、配置模板、完整步骤 | 克隆本仓库后配置 |
-| 现在不要跑 | 只交付源码和说明，无自动运行 CI | 后续自行运行验收 |
+| 端到端验收 | 已在 Windows 本机实际完成 | 见 [STATUS.md](STATUS.md) 和 `outputs/`、`dist/` |
 
 这些是**实现覆盖情况**；实际能否完整运行，还需要在允许运行时验证 DSH、代理服务和 NOAA 网络访问。
 
@@ -67,7 +67,7 @@ SCI_DSH_API_KEY=仅在本机填写你的密钥
 - 本机验证使用的服务入口是 `https://token.fncompute.com/v1`；该地址已通过模型列表、流式输出和工具调用请求验证。换设备时仍应以服务控制台或文档给出的 OpenAI 兼容 API base URL 为准。
 - 模型 ID 必须从控制台复制，不猜测名称。模型和代理都需要支持工具调用。
 - 当前本机已验证代理和模型的流式输出、工具调用可用；这不代表 NOAA 数据下载网络一定可用。
-- `.env` 被 Git 忽略；不要把 key 写入 Skill、提示词或 GitHub。新设备重新填写即可。
+- `.env` 被 Git 忽略；不要把 key 写入 Skill、提示词或 GitHub。新设备重新填写即可。若 NOAA ERDDAP 不能访问，可在本机 `.env` 增加 `SCI_DSH_DATA_SOURCE=psl-monthly` 与 `SCI_DSH_DATA_PROXY=direct`，使用官方 PSL 月平均回退；该回退不关闭 TLS 校验。
 - 如需使用其他 Python，在 `.env` 加 `SCI_DSH_PYTHON=/你的/python/完整路径`。
 
 之后可以主动执行：
@@ -106,7 +106,7 @@ npm run web -- --port 3080
 | B | 15.125°N，114.125°E | 1982–2025，换输入复用 |
 | missing-month | 与 B 相同 | 人为删除 2000-02，用于教学 |
 
-来源是 [NOAA OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) 格点分析产品。它们不是观测站，也不是南海区域平均。脚本下载日值，只有自然月全部日期有效才计算完整月均值。
+来源是 [NOAA OISST](https://www.ncei.noaa.gov/products/optimum-interpolation-sst) 格点分析产品。它们不是观测站，也不是南海区域平均。默认下载器从 NOAA ERDDAP 获取日值并计算自然月平均；本机验收因 ERDDAP 黑名单/TLS 阻塞使用 `SCI_DSH_DATA_SOURCE=psl-monthly`，直接复核 NOAA PSL 官方已发布月平均值，不在本地重新聚合日值或插值。两种来源都会记录 URL、来源、哈希和覆盖范围。
 
 下载中断可在 Harness 中要求“继续准备数据，复用缓存”。历史镜像缺项仅在 2016 年以前、官方说明 v2 与 v2.1 SST 相同的区间，核对重叠值后使用有出处的 v2 数据补充，并记录具体来源。2016 年以后不采用旧版补充；未解决的缺值会报错。详见 [数据说明](data/README.md)。
 

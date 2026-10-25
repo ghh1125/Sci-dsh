@@ -66,6 +66,14 @@ def tls_context():
         bundle = os.environ.get("SCI_DSH_DATA_CA_BUNDLE", "").strip()
         if bundle:
             context.load_verify_locations(cafile=bundle)
+        # NOAA PSL's public TDS requests a legacy TLS renegotiation sequence
+        # on some Windows paths. This option keeps certificate verification
+        # enabled while allowing that server-side handshake when the explicit
+        # PSL fallback is selected.
+        if os.environ.get("SCI_DSH_DATA_SOURCE", "").strip().lower() == "psl-monthly":
+            legacy = getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0)
+            if legacy:
+                context.options |= legacy
         return context
     except (OSError, ssl.SSLError, ValueError):
         raise NetworkConfigurationError("tls_config") from None
@@ -92,6 +100,10 @@ class HTTPSOnlyRedirect(urllib.request.HTTPRedirectHandler):
 
 def _proxy_handler():
     proxy = os.environ.get("SCI_DSH_DATA_PROXY", "").strip()
+    if proxy.lower() in {"direct", "none", "off"}:
+        # Explicitly bypass inherited system proxy variables. This keeps the
+        # data path deterministic when a local proxy cannot tunnel NOAA TLS.
+        return urllib.request.ProxyHandler({})
     if not proxy:
         # ProxyHandler's default reads standard proxy variables/system settings.
         return urllib.request.ProxyHandler()
