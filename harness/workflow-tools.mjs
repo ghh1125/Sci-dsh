@@ -60,7 +60,7 @@ export function makeWorkflowTools(ctx, config) {
         const downloader = source === 'psl-monthly' ? 'fetch_noaa_psl_monthly.py' : 'fetch_noaa_oisst.py';
         const result = await runPython(ctx, config, exec, downloader, params, 'sst_prepare_data');
         const payload = result.result;
-        const mode = ['local-cache', 'download', 'offline'].includes(payload?.mode) ? payload.mode
+        const mode = ['local-cache', 'download', 'offline', 'psl-monthly'].includes(payload?.mode) ? payload.mode
           : args.offline === true ? 'offline' : 'download';
         if (!result.ok || payload?.status !== 'ok') {
           const error = result.error ?? { category: 'DOWNLOAD_PROTOCOL_ERROR',
@@ -79,7 +79,7 @@ export function makeWorkflowTools(ctx, config) {
         }
         return { ...result, mode, validation: checks,
           files: ['point_A_monthly.csv', 'point_B_monthly.csv', 'point_B_gap_demo.csv'],
-          source: 'https://www.ncei.noaa.gov/products/optimum-interpolation-sst',
+          source: payload?.source ?? 'https://www.ncei.noaa.gov/products/optimum-interpolation-sst',
           note: '月数据和配套metadata已生成；分析仍会核对SHA、单位与基准期。' };
       });
     }, 1800000),

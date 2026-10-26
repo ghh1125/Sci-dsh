@@ -33,7 +33,11 @@ export function pythonEnvironment(script, source = process.env) {
 }
 
 function redactDataConfig(text) {
-  const names = [...DATA_ENV_NAMES, 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'];
+  // The source selector is a public provenance label (for example
+  // `psl-monthly`), so keep it visible in diagnostics. Proxy and CA values
+  // remain redacted because they may contain credentials or local paths.
+  const names = ['SCI_DSH_DATA_PROXY', 'SCI_DSH_DATA_CA_BUNDLE',
+    'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'];
   let safe = String(text ?? '');
   for (const name of names) {
     const value = process.env[name];

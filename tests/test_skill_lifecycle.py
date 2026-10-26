@@ -103,6 +103,20 @@ class SkillLifecycleTests(unittest.TestCase):
         self.assertEqual(evidence["baseline"], [1991, 2020])
         self.assertEqual((draft / "scripts/analyze_sst.py").read_bytes(), self.script)
 
+    def test_published_monthly_coverage_is_accepted_without_daily_claim(self):
+        self.report["checks"] = {"complete_monthly_coverage": True,
+                                  "complete_daily_coverage": False,
+                                  "complete_source_coverage": True,
+                                  "coverage_basis": "published_monthly",
+                                  "baseline_count_per_month": 30,
+                                  "baseline_mean_anomaly_max_abs_c": 0.0}
+        self.save_report()
+        result = self.create()
+        evidence = json.loads((self.root / "drafts" / NAME / "references/example-run.json").read_text(encoding="utf-8"))
+        self.assertEqual(result["status"], "ok")
+        self.assertFalse(evidence["checks"]["complete_daily_coverage"])
+        self.assertTrue(evidence["checks"]["complete_source_coverage"])
+
     def test_failed_and_old_reports_cannot_create(self):
         for changed in ({"status": "error"}, {"metadata_file": None}):
             with self.subTest(changed=changed):

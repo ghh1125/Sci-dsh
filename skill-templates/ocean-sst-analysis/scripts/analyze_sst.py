@@ -245,6 +245,11 @@ def analyze(input_path, metadata_path, baseline, output, style="presentation"):
         rows, metadata, digest = load_and_validate(input_path, metadata_path, baseline)
         results, climatology, residual = calculate(rows, baseline)
         render(results, climatology, metadata, baseline, output, style)
+        source_frequency = str(metadata.get("source_frequency", "daily_aggregated")).strip() or "daily_aggregated"
+        daily_verified = metadata.get("daily_coverage_verified")
+        if not isinstance(daily_verified, bool):
+            daily_verified = source_frequency != "monthly_published"
+        published_monthly = source_frequency == "monthly_published"
         fields = ["month", "lat", "lon", "sst_mean_c", "climatology_c", "anomaly_c",
                   "n_valid_days", "n_expected_days"]
         write_csv(output / "result.csv", fields, results)
@@ -262,13 +267,19 @@ def analyze(input_path, metadata_path, baseline, output, style="presentation"):
             "point": {"lat": metadata["lat"], "lon": metadata["lon"]},
             "coverage": [results[0]["month"], results[-1]["month"]],
             "baseline": list(baseline), "row_count": len(results), "source": metadata,
-            "checks": {"complete_monthly_coverage": True, "complete_daily_coverage": True,
-                       "baseline_count_per_month": 30, "baseline_mean_anomaly_max_abs_c": residual},
+            "checks": {"complete_monthly_coverage": True,
+                       "complete_daily_coverage": daily_verified,
+                       "complete_source_coverage": True,
+                       "coverage_basis": "published_monthly" if published_monthly else "daily_aggregated",
+                       "baseline_count_per_month": 30,
+                       "baseline_mean_anomaly_max_abs_c": residual},
             "spot_check": {k: check[k] for k in ("month", "sst_mean_c", "climatology_c", "anomaly_c")},
             "artifacts": ["sst_analysis.png", "sst_analysis.svg", "sst_analysis.pdf", "result.csv",
                           "climatology.csv", "summary.md", "report.json"],
         }
-        summary = f"""# 海温分析结果\n\n本次分析已通过数据完整性与基准期检查。\n\n- 示例格点：{metadata['lat']:.3f}°N，{metadata['lon']:.3f}°E。\n- 数据覆盖：{results[0]['month']} 至 {results[-1]['month']}，共 {len(results)} 个月。\n- 基准期：{baseline[0]}–{baseline[1]}，每个日历月 30 个完整月均值。\n- 数据来源：[{metadata.get('source_title', metadata['product'])}]({metadata['source_url']})。\n\n## 数值抽查\n\n{check['month']} 的月均海温为 {check['sst_mean_c']:.4f} °C，同月气候态为 {check['climatology_c']:.4f} °C，两者之差为 {check['anomaly_c']:+.4f} °C。计算及验收使用未舍入数值。\n\n## 图注\n\n南海示例格点的月平均海表温度与异常。上图比较 {latest_year} 年月均海温与 {baseline[0]}–{baseline[1]} 年同月气候态；下图展示各月相对于同一基准的海温异常。月气候态为基准期内各年同一日历月月均值的等权平均。数据来自 {metadata['product']}，无平滑或缺值插补。\n\n## 解释范围\n\n这是单个格点的分析产品结果，不代表整个南海的区域平均。本示例未进行趋势显著性检验、海洋热浪判定或因果归因。相邻月份和年份也不能视为独立重复实验。\n\n## 复现\n\n方法版本：{METHOD_VERSION}；样式：{style}；运行标识：{run_id}。输入、脚本校验值及完整参数见 report.json。图形样式的改变不应改变数值结果。\n"""
+        coverage_note = ("NOAA 官方发布月平均完整；未在本地核验逐日文件或重新聚合。"
+                         if published_monthly else "自然月逐日值完整后计算月平均。")
+        summary = f"""# 海温分析结果\n\n本次分析已通过数据完整性与基准期检查。\n\n- 示例格点：{metadata['lat']:.3f}°N，{metadata['lon']:.3f}°E。\n- 数据覆盖：{results[0]['month']} 至 {results[-1]['month']}，共 {len(results)} 个月。\n- 覆盖依据：{coverage_note}\n- 基准期：{baseline[0]}–{baseline[1]}，每个日历月 30 个完整月均值。\n- 数据来源：[{metadata.get('source_title', metadata['product'])}]({metadata['source_url']})。\n\n## 数值抽查\n\n{check['month']} 的月均海温为 {check['sst_mean_c']:.4f} °C，同月气候态为 {check['climatology_c']:.4f} °C，两者之差为 {check['anomaly_c']:+.4f} °C。计算及验收使用未舍入数值。\n\n## 图注\n\n南海示例格点的月平均海表温度与异常。上图比较 {latest_year} 年月均海温与 {baseline[0]}–{baseline[1]} 年同月气候态；下图展示各月相对于同一基准的海温异常。月气候态为基准期内各年同一日历月月均值的等权平均。数据来自 {metadata['product']}，无平滑或缺值插补。\n\n## 解释范围\n\n这是单个格点的分析产品结果，不代表整个南海的区域平均。本示例未进行趋势显著性检验、海洋热浪判定或因果归因。相邻月份和年份也不能视为独立重复实验。\n\n## 复现\n\n方法版本：{METHOD_VERSION}；样式：{style}；运行标识：{run_id}。输入、脚本校验值及完整参数见 report.json。图形样式的改变不应改变数值结果。\n"""
         (output / "summary.md").write_text(summary, encoding="utf-8")
         (output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         return report

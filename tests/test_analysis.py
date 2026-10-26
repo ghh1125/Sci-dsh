@@ -57,6 +57,17 @@ class AnalysisTests(unittest.TestCase):
         self.assertAlmostEqual(july_2025["anomaly_c"], .01 * (2025 - 2005.5), places=12)
         self.assertLess(residual, 1e-12)
 
+    def test_published_monthly_source_does_not_claim_daily_verification(self):
+        self.metadata.update({"source_frequency": "monthly_published",
+                              "daily_coverage_verified": False, "complete": True})
+        self.save()
+        report = sst.analyze(self.input, self.meta, (1991, 2020), self.root / "monthly", "default")
+        self.assertFalse(report["checks"]["complete_daily_coverage"])
+        self.assertTrue(report["checks"]["complete_source_coverage"])
+        self.assertEqual(report["checks"]["coverage_basis"], "published_monthly")
+        summary = (self.root / "monthly" / "summary.md").read_text(encoding="utf-8")
+        self.assertIn("未在本地核验逐日文件", summary)
+
     def test_baseline_change_identity(self):
         rows, _, _ = self.load()
         first, climate1, _ = sst.calculate(rows, (1991, 2020))

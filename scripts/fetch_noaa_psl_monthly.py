@@ -35,6 +35,10 @@ TIME_EPOCH = dt.datetime(1800, 1, 1, tzinfo=dt.timezone.utc)
 VALUE_LINE = re.compile(r"^\[(\d+)\]\[(\d+)\],\s*([^\s]+)\s*$")
 
 
+class OfflineUnavailableError(Exception):
+    """The verified PSL raw response is not available for an offline run."""
+
+
 def _parse_list(text: str, label: str) -> list[float]:
     match = re.search(rf"{re.escape(label)}\[\d+\]\s*\n([^\n]+)", text)
     if not match:
@@ -167,6 +171,8 @@ def prepare(args):
             if info.get("sha256") == hashlib.sha256(raw_body).hexdigest() and info.get("source_url") == PSL_URL:
                 body, source = raw_body, info
         if body is None:
+            if args.offline:
+                raise OfflineUnavailableError("本地 NOAA PSL 原始缓存缺失或未通过校验，离线模式不下载")
             last = None
             for attempt in range(1, args.attempts + 1):
                 if time.monotonic() >= deadline:
@@ -201,6 +207,16 @@ def prepare(args):
                       "started_at": started, "updated_at": base.NOW(), "completed_years": list(range(base.START_YEAR, base.END_YEAR + 1)),
                       "source_hosts": ["psl.noaa.gov"]})
         return result
+    except OfflineUnavailableError as exc:
+        detail = {"category": "offline_unavailable", "message": str(exc),
+                  "retryable": False,
+                  "action": "从已成功准备数据的电脑复制完整 data/raw 目录，或取消 offline 后联网准备。"}
+        result = {"status": "error", "mode": "psl-monthly", "error": detail,
+                  "phase": "local-check", "started_at": started, "updated_at": base.NOW(),
+                  "completed_years": [], "source_hosts": ["psl.noaa.gov"]}
+        base.save_json(data / "download_status.json", result)
+        base.save_json(data / "download_failures.json", result)
+        return result
     except Exception as exc:
         detail = base.error_details(exc)
         result = {"status": "error", "mode": "psl-monthly", "error": detail,
@@ -218,11 +234,14 @@ def main(argv=None):
     parser.add_argument("--timeout", type=int, default=90)
     parser.add_argument("--attempts", type=int, default=3)
     parser.add_argument("--budget-seconds", type=int, default=1200)
+    parser.add_argument("--offline", action="store_true")
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--no-gap-fixture", action="store_true")
     args = parser.parse_args(argv)
     if not 1 <= args.timeout <= 120 or not 1 <= args.attempts <= 4 or not 60 <= args.budget_seconds <= 1500:
         parser.error("timeout: 1..120; attempts: 1..4; budget-seconds: 60..1500")
+    if args.offline and args.refresh:
+        parser.error("offline 与 refresh 不能同时为true")
     result = prepare(args)
     print(json.dumps(result, ensure_ascii=False), flush=True)
     return 0 if result["status"] == "ok" else 2

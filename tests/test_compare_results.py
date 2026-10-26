@@ -145,6 +145,16 @@ class ComparisonTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'metadata_sha256'):
             comparison.compare(first, second, 'style')
 
+    def test_published_monthly_runs_compare_without_daily_claim(self):
+        first = self.run_fixture('first', style='default')
+        second = self.run_fixture('second', style='presentation')
+        checks = {'complete_monthly_coverage': True, 'complete_daily_coverage': False,
+                  'complete_source_coverage': True, 'coverage_basis': 'published_monthly'}
+        self.mutate_report(first, checks=checks)
+        self.mutate_report(second, checks=checks)
+        result = comparison.compare(first, second, 'style')
+        self.assertEqual(result['status'], 'ok')
+
     def test_style_comparison_rejects_baseline_change(self):
         first = self.run_fixture('first')
         second = self.run_fixture('second', (1982, 2011))

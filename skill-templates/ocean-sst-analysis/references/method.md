@@ -41,7 +41,7 @@ metadata 包含 `units`、`lat`、`lon`、`start_month`、`end_month`、`source_
 
 ## 质量检查与计算
 
-`sst_analyze` 是实际质控入口，拒绝重复月份、声明范围内缺月、非有限数值、单位或格点不一致，以及不完整日覆盖。`n_expected_days` 必须等于自然月天数，`n_valid_days` 必须等于 `n_expected_days`；不接受部分日期的月均值。不能为出图而放宽要求。
+`sst_analyze` 是实际质控入口，拒绝重复月份、声明范围内缺月、非有限数值、单位或格点不一致，以及不完整覆盖。ERDDAP 日值路径要求 `n_expected_days` 等于自然月天数、`n_valid_days` 等于 `n_expected_days`，并在报告中标记 `complete_daily_coverage: true`；PSL 回退使用官方发布月平均，报告标记 `complete_source_coverage: true` 和 `complete_daily_coverage: false`，不能把它表述为本地逐日核验。不能为出图而放宽月份、来源或单位检查。
 
 默认基准期 **1991–2020**，两端均包含。每个历月有 30 个完整月均值，输出 `sample_count` 为 30：
 

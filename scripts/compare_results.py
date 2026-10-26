@@ -65,6 +65,14 @@ def parse_month(label):
 
 def validate_run(folder, report):
     """Recheck each run independently, so relabelled/copied outputs cannot pass."""
+    checks = report.get('checks') if isinstance(report.get('checks'), dict) else {}
+    # Older reports predate the explicit source-coverage field and used the
+    # daily flag for the original ERDDAP path. The PSL fallback records a
+    # complete published monthly source without claiming daily verification.
+    daily_verified = checks.get('complete_daily_coverage', True) is True
+    source_complete = checks.get('complete_source_coverage', False) is True
+    if not (daily_verified or source_complete):
+        raise ValueError('运行报告没有可接受的月数据覆盖证明。')
     result = table(folder / 'result.csv', 'month', RESULT_COLUMNS)
     climate = table(folder / 'climatology.csv', 'calendar_month',
                     {'calendar_month', 'climatology_c', 'sample_count'})
@@ -93,8 +101,12 @@ def validate_run(folder, report):
     for label, row in result.items():
         year, month = parse_month(label)
         days = calendar.monthrange(year, month)[1]
-        if int(row['n_valid_days']) != days or int(row['n_expected_days']) != days:
-            raise ValueError(f'{label} 的日覆盖不完整。')
+        valid_days, expected_days = int(row['n_valid_days']), int(row['n_expected_days'])
+        if daily_verified:
+            if valid_days != days or expected_days != days:
+                raise ValueError(f'{label} 的日覆盖不完整。')
+        elif valid_days != expected_days or expected_days != days:
+            raise ValueError(f'{label} 的月记录覆盖字段不一致。')
         if abs(finite(row['lat']) - lat) > 1e-7 or abs(finite(row['lon']) - lon) > 1e-7:
             raise ValueError(f'{label} 的格点与报告不一致。')
         sst = finite(row['sst_mean_c'])

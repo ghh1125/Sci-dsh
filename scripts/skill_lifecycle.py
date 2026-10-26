@@ -283,7 +283,9 @@ def verify_run(root: Path, value, template: dict[str, bytes]) -> dict:
         if not checked_file(run / label):
             raise LifecycleError("成功报告对应的产物为空")
     checks = report.get("checks", {})
-    if not isinstance(checks, dict) or checks.get("complete_monthly_coverage") is not True or checks.get("complete_daily_coverage") is not True or checks.get("baseline_count_per_month") != 30:
+    daily_coverage = isinstance(checks, dict) and checks.get("complete_daily_coverage") is True
+    source_coverage = isinstance(checks, dict) and checks.get("complete_source_coverage") is True
+    if not isinstance(checks, dict) or checks.get("complete_monthly_coverage") is not True or not (daily_coverage or source_coverage) or checks.get("baseline_count_per_month") != 30:
         raise LifecycleError("报告未通过完整性与基准期检查")
     baseline = report.get("baseline")
     if not isinstance(baseline, list) or len(baseline) != 2 or not all(type(y) is int for y in baseline) or baseline[1] - baseline[0] != 29:
@@ -303,8 +305,9 @@ def verify_run(root: Path, value, template: dict[str, bytes]) -> dict:
             "baseline": baseline, "point": report.get("point"), "coverage": report.get("coverage"),
             "row_count": report.get("row_count"), "style": report.get("style"),
             "checks": {key: checks[key] for key in ("complete_monthly_coverage",
-                       "complete_daily_coverage", "baseline_count_per_month",
-                       "baseline_mean_anomaly_max_abs_c")}, "source": source,
+                       "complete_daily_coverage", "complete_source_coverage", "coverage_basis",
+                       "baseline_count_per_month",
+                       "baseline_mean_anomaly_max_abs_c") if key in checks}, "source": source,
             "note": "This records verified local files from one successful run; it does not execute or independently repeat the scientific analysis."}
 
 
